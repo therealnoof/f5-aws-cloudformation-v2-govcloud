@@ -6,9 +6,11 @@
 > ## 🇺🇸 GovCloud edition
 > This is the **AWS GovCloud (US)** adaptation of F5's CloudFormation templates, maintained in [F5GovSolutions](https://github.com/F5GovSolutions) (the upstream [`F5Networks/f5-aws-cloudformation-v2`](https://github.com/F5Networks/f5-aws-cloudformation-v2) is in sustainment). It adds GovCloud/air-gap support to the **failover** solution: staged-bucket deployment, automated VPC endpoints (S3, EC2, Secrets Manager, CloudFormation), and an automated clustering self-heal that works around a documented BIG-IP device-trust startup bug.
 >
-> **➡️ Start here:** [**`examples/failover/GOVCLOUD-GUIDE.md`**](./examples/failover/GOVCLOUD-GUIDE.md) — a complete, first-time-operator walkthrough for deploying into GovCloud, including fully air-gapped environments.
+> **➡️ Start here — pick the one that matches your environment:**
+> - [**`examples/failover/GOVCLOUD-GUIDE.md`**](./examples/failover/GOVCLOUD-GUIDE.md) — the standard GovCloud failover pair, with Elastic IPs. A complete first-time-operator walkthrough.
+> - [**`examples/failover-airgap/AIRGAP-GUIDE.md`**](./examples/failover-airgap/AIRGAP-GUIDE.md) — the **fully air-gapped** variant: **no public IP addresses anywhere**, VIP failover between Availability Zones by route rather than by Elastic IP, and management through AWS Systems Manager Session Manager. Lab-validated 2026-09-08 in `us-gov-east-1`, failing over in **~6 seconds** in both directions.
 >
-> **⚠️ Scope:** Only the **failover (active/standby HA pair)** solution using the **3-NIC PAYG** runtime-init config is currently GovCloud-adapted and validated. The other solutions (**autoscale**, **quickstart** standalone) and the other failover variants (**2-NIC**, **BYOL**, non-`-with-app`) are **not yet** GovCloud-enabled — they still carry the upstream configuration and would need the same treatment. That is planned future work.
+> **⚠️ Scope:** Only the **failover (active/standby HA pair)** solution using the **3-NIC PAYG** runtime-init config is currently GovCloud-adapted and validated — in both the EIP-based (`examples/failover`) and air-gap (`examples/failover-airgap`) forms. The other solutions (**autoscale**, **quickstart** standalone) and the other failover variants (**2-NIC**, **BYOL**, non-`-with-app`) are **not yet** GovCloud-enabled — they still carry the upstream configuration and would need the same treatment. That is planned future work.
 
 ## F5 BIG-IP AWS CloudFormation 2.0
 

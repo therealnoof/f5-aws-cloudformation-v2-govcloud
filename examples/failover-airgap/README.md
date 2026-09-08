@@ -26,10 +26,17 @@ VIP prefix that targets the active BIG-IP's external interface, and CFE retarget
 routes (`failoverRoutes`) when the active device changes. Every AWS API call the BIG-IPs
 make is served by a VPC endpoint.
 
-> **Status: scaffolded, not yet lab-validated.** The templates lint clean and follow the
-> CFE documentation, but the route-based failover path has not been deployed end to end in
-> GovCloud yet. Validate in both failover directions before this appears in a customer
-> design. See [AIRGAP-GUIDE.md](AIRGAP-GUIDE.md) for the validation procedure.
+> ### ✅ Status: lab-validated
+> Deployed and failover-tested end to end in `us-gov-east-1` on **2026-09-08** (3-NIC PAYG,
+> BIG-IP 17.5.1.6-0.0.25, CFE 2.4.0). VIP failover was verified in **both** directions and
+> converged in **~6 seconds each way**, measured from an in-VPC client at a 0.5 s poll
+> interval. That is a single small sample in one environment - measure it in your own
+> before committing to an RTO.
+>
+> **➡️ New here? Start with [AIRGAP-GUIDE.md](AIRGAP-GUIDE.md)** - a complete step-by-step
+> deployment walkthrough with architecture diagrams, Session Manager and GUI access, a
+> validation checklist and troubleshooting. This README is the parameter and output
+> reference.
 
 ## What is different from `examples/failover`
 
@@ -111,11 +118,21 @@ See `failover-airgap-parameters.json` for a complete example parameter set.
 
 ## Deploying this Solution
 
-Stage the bucket exactly as in the GovCloud guide, with this directory included:
+**For a full walkthrough - prerequisites, the Session Manager plugin, staging the bucket,
+pre-flight checks, GUI access and validation - see
+[AIRGAP-GUIDE.md](AIRGAP-GUIDE.md#4-step-by-step-deployment).** The condensed form follows.
+
+Stage the bucket exactly as in the GovCloud guide, with this directory included. Note that
+the air-gap solution also depends on the shared `modules/network`, `modules/bigip-standalone`
+and `modules/ssm-jump` templates, so sync the whole `examples/` tree, not just this
+directory:
 
 ```bash
 aws s3 sync examples/ "s3://${BUCKET}/f5-aws-cloudformation-v2/v3.6.0.0/examples/" --region "${REGION}"
 ```
+
+> Never add `--delete` - the runtime-init installer and the three extension RPMs live only
+> in the bucket, not in this repo, and would be removed.
 
 Then:
 
@@ -132,17 +149,29 @@ and `restrictedSrcAddressApp` in the parameters file first.
 
 ## Validation
 
-[AIRGAP-GUIDE.md](AIRGAP-GUIDE.md) has the full procedure. The short form: paste the
-`ssmPortForwardBigIp01` output into a terminal, open `https://localhost:8443`, then on the
-active device:
+[AIRGAP-GUIDE.md](AIRGAP-GUIDE.md#6-validating-the-deployment) has the full checklist. The
+short form - paste the `ssmPortForwardBigIp01` output into a terminal, open
+`https://localhost:8443`, then:
 
 ```bash
-# CFE must list the VIP route - "routes" must NOT be empty
-curl -sku admin:"${PW}" https://localhost/mgmt/shared/cloud-failover/inspect | python3 -m json.tool
+# CFE must list the VIP route - "routes" must NOT be empty.
+# "addresses" being empty is correct: this design has no EIPs to move.
+curl -sku admin:"${PW}" https://localhost:8443/mgmt/shared/cloud-failover/inspect | python3 -m json.tool
 
-# Fail over, then watch the route target flip to the peer's ENI
+# Every next-hop item MUST be a bare address - a "/24" here breaks failover in one
+# direction while still reporting success. See AIRGAP-GUIDE.md troubleshooting.
+curl -sku admin:"${PW}" https://localhost:8443/mgmt/shared/cloud-failover/declare \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["declaration"]["failoverRoutes"]["routeGroupDefinitions"][0]["defaultNextHopAddresses"]["items"])'
+
+# Then fail over from the ACTIVE device and watch the route target flip to the peer's ENI.
+# Test BOTH directions - a fault can exist in only one.
 tmsh run sys failover standby
 ```
+
+> **Monitoring note.** CFE reports `taskState: SUCCEEDED` / `Failover Complete` even when
+> it performs zero route operations, and `inspect` still looks healthy. Production health
+> checks must compare the **actual route target** against the **actual active device**,
+> not CFE's own status.
 
 ## Deleting this Solution
 

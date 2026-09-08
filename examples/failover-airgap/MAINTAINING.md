@@ -5,6 +5,20 @@ It exists so that the air-gap path (no Elastic IPs, route-based VIP failover) ca
 built and validated without touching the working EIP-based path. The price of that is
 duplication, and this file is what keeps the two from drifting.
 
+## Validation record
+
+| | |
+|---|---|
+| **Validated** | 2026-09-08, `us-gov-east-1` |
+| **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
+| **Result** | Deployed end to end; VIP failover verified in **both** directions |
+| **Convergence** | ~6 s each way (in-VPC client, 0.5 s poll, last-good to first-good) |
+| **Defect found and fixed** | Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below |
+
+Re-run the [validation checklist](AIRGAP-GUIDE.md#6-validating-the-deployment) and both
+failover directions after any change to the CFE declaration, the network module's route
+table tagging, or the `externalSelfIp` / `peerExternalSelfIp` instance tags.
+
 ## What is shared, what is forked
 
 | Component | Status | Notes |
@@ -102,8 +116,10 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
 
 ## Converging later
 
-If the air-gap path proves out, the right long-term shape is probably a mode parameter on
-`examples/failover/failover.yaml` rather than two parents. Build that from this directory
-once the route-based path has been lab-validated in both failover directions and its
-convergence time measured; the list above is the change set that parameter would have
-to switch.
+The air-gap path has now proved out (see the validation record above), so the right
+long-term shape is probably a mode parameter on `examples/failover/failover.yaml` rather
+than two parents. The change set above is what that parameter would have to switch. The
+main open question is whether the EIP-based and route-based paths can share one set of
+runtime-init configs, or whether the CFE declaration differences (`failoverAddresses` vs
+`failoverRoutes`, and the next-hop list) make two files the clearer option even inside a
+merged parent.

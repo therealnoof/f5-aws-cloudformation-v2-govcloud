@@ -40,7 +40,7 @@ Before you start, make sure you have:
 - **An AWS GovCloud (US) account** and credentials, with permission to create CloudFormation stacks, VPCs, EC2 instances, IAM roles (`CAPABILITY_NAMED_IAM`), S3 buckets, Secrets Manager secrets, and (for air-gap) VPC endpoints. You will need programmatic access keys like: Access Key, Secret Access Key and Session Token
 - **The AWS CLI** configured for your GovCloud account (`aws configure` with your GovCloud access keys), or Console access to the GovCloud CloudFormation service. These steps are outside the scope of this guide but you can easily Google this. Installing the AWS CLI is easy and will make your life easier when transferring the artifacts to your S3 bucket.
 - **A clone of this repository** (you will run `aws s3 sync` from its root). After you clone this repo then CD to it and run the "awss s3 sync" commands from this root.
-- **The three BIG-IP extension RPMs and the runtime-init installer** (see [Step 5](#5-stage-the-templates-and-bigip-artifacts-in-your-bucket)). These are **not** in the repo and must be downloaded once (from a machine with internet) and staged into your bucket. 
+- **The three BIG-IP extension RPMs and the runtime-init installer** (see [Step 5](#7-stage-the-templates-and-big-ip-artifacts-in-your-bucket)). These are **not** in the repo and must be downloaded once (from a machine with internet) and staged into your bucket. 
 - **Enough Elastic IP (EIP) quota.** This is the single most common deployment blocker — see the warning below.
 - **AWS Objects** You will need to create a S3 bucket for staging artifacts(this repo and RPM's), SSH Key Pair, and a Secret created in Secrets Manager. Create these in the region you will deploy in, this is called out below.
 
@@ -56,7 +56,7 @@ Before you start, make sure you have:
 >
 > EIP consumers: 2 × NAT gateway (1/AZ, always created), 2 × external Self IP (toggle), 2 × management (toggle), 1 × VIP (toggle).
 >
-> **Before deploying:** confirm your quota (Service Quotas → *EC2-VPC Elastic IPs*, code `L-0263D0A3`) and either request an increase or reduce EIP usage with the public-IP toggles in [Step 7](#7-air-gap-choose-your-public-ip-toggles-and-endpoints). Also note: a **failed stack that you leave standing still holds its EIPs** — delete it and release orphaned addresses before retrying (see [Troubleshooting](#elastic-ip-limit-exceeded)).
+> **Before deploying:** confirm your quota (Service Quotas → *EC2-VPC Elastic IPs*, code `L-0263D0A3`) and either request an increase or reduce EIP usage with the public-IP toggles in [Step 7](#9-air-gap-choose-your-public-ip-toggles-and-endpoints). Also note: a **failed stack that you leave standing still holds its EIPs** — delete it and release orphaned addresses before retrying (see [Troubleshooting](#elastic-ip-limit-exceeded)).
 
 ---
 
@@ -513,8 +513,21 @@ This is entirely private and works with **zero internet egress**. The EC2 API ca
 
 ### 13.4 Configuring it
 
-> ### ⚠️ Not yet lab-validated — read before you rely on this
-> The diagnosis in [§13.1](#131-why-the-private-vip-cannot-move)–[§13.3](#133-how-route-based-failover-works) is confirmed against a live `us-gov-east-1` deployment. **The `failoverRoutes` declaration in Step 4 below is not.** It follows CFE's documented schema, but it has not been run end to end in this environment. Validate it in a lab — in both directions — before it appears in a customer design.
+> ### ✅ Lab-validated — and there is now a template that does all of this for you
+> This section describes configuring route-based failover **by hand** on top of the
+> EIP-based solution. Since it was written, [`examples/failover-airgap`](../failover-airgap/README.md)
+> has been built to do the whole thing declaratively — routes, tagging, source/destination
+> checking, the CFE declaration and Session Manager access — and was deployed and
+> failover-tested end to end in `us-gov-east-1` on **2026-09-08**, converging in **~6 seconds
+> in both directions**. Unless you specifically need to retrofit an existing EIP-based stack,
+> **use that template instead** and follow [AIRGAP-GUIDE.md](../failover-airgap/AIRGAP-GUIDE.md).
+>
+> **One correction that matters if you do configure this by hand.** The next-hop addresses in
+> the `failoverRoutes` declaration must be **bare** — `10.0.0.11`, not `10.0.0.11/24`. CFE
+> matches that list against each device's own addresses to pick its next hop, and a masked
+> entry never matches. The device named by the masked entry then performs **zero** route
+> operations while still reporting `taskState: SUCCEEDED`, so failover appears to work but
+> the VIP goes dark in one direction only. This cost a lab session to find.
 >
 > **IAM is not the blocker — this was checked against the templates.** `failover.yaml` passes `solutionType: failover`, which provisions `BigIpHighAvailabilityAccessRole` (`modules/access/access.yaml`). That role already grants `ec2:ReplaceRoute`, `ec2:CreateRoute`, `ec2:DescribeRouteTables`, and `ec2:DescribeSubnets` alongside the address-failover actions. The other role variants (`standard`, `secret`, `s3`) do **not** carry the route permissions — but this solution does not use them, so do not go looking there.
 >
@@ -629,11 +642,13 @@ watch -n2 "aws ec2 describe-route-tables --region $REGION --route-table-ids $RTB
 
 Test in **both** directions — IAM and endpoint problems sometimes surface on only one instance.
 
-### 13.6 Two things to plan for
+### 13.6 Three things to plan for
 
 **Reachability beyond the VPC.** Route-based failover gives you VPC-internal reachability. Clients arriving over Direct Connect, VPN, or a Transit Gateway need the VIP prefix propagated into **those** route tables as well. Straightforward, but it is a conversation with the customer's network team and should be in the design, not discovered during testing.
 
-**Convergence is slower than an EIP move.** Route table updates take longer to take effect than an ENI address reassignment — plan on tens of seconds rather than a handful. **If the customer has a hard RTO, measure it in a lab before it appears in a design document.**
+**Convergence.** Measured at **~6 seconds in both directions** on `examples/failover-airgap` in `us-gov-east-1` (2026-09-08; 3-NIC PAYG 17.5.1.6, in-VPC client polling at 0.5 s, last-good to first-good response). This is better than route-based failover is often assumed to be — earlier drafts of this guide estimated "tens of seconds". It is still a single small sample in one environment, so **measure it in your own before committing to an RTO**, and quote a figure with headroom.
+
+**Monitoring must check the route, not just CFE.** CFE writes `taskState: SUCCEEDED` / `Failover Complete` even when it performs zero route operations, and `cloud-failover/inspect` still looks healthy. A health check that only watches CFE's own status will miss a total VIP outage. Compare the **actual route target** against the **actual active device**.
 
 ---
 
@@ -651,7 +666,7 @@ Defaults below reflect this solution as configured for GovCloud. Anything marked
 ### BIG-IP image & size
 | Parameter | What it does | When to change |
 | --- | --- | --- |
-| `bigIpImage` | Name pattern used to find the BIG-IP marketplace AMI. | Set to a build that exists in your Region ([Step 6](#6-find-the-bigip-image-in-your-region)). |
+| `bigIpImage` | Name pattern used to find the BIG-IP marketplace AMI. | Set to a build that exists in your Region ([Step 6](#6-find-the-big-ip-image-in-your-region)). |
 | `bigIpInstanceType` | EC2 instance type for the BIG-IPs. | Larger for more throughput; ENA-capable types boot/initialize faster. |
 | `bigIpCustomImageId` | Use a specific AMI ID instead of the lookup. | Only if you baked a custom image. |
 
@@ -731,7 +746,7 @@ aws ec2 release-address --region "$REGION" --allocation-id <AllocationId>
 ```
 
 ### "Everything deployed but nothing got configured" / HTTP 403 at boot
-The bucket artifacts aren't anonymously readable. Re-check [Step 8](#8-make-the-artifacts-readable-by-the-bigip-required): the curl verify loop must return **200** for the `.run`, the `runtime-init-conf-*.yaml`, and each RPM. A **404** means a file wasn't uploaded (`aws s3 cp` it).
+The bucket artifacts aren't anonymously readable. Re-check [Step 8](#8-make-the-artifacts-readable-by-the-big-ip-required): the curl verify loop must return **200** for the `.run`, the `runtime-init-conf-*.yaml`, and each RPM. A **404** means a file wasn't uploaded (`aws s3 cp` it).
 
 ### AS3 `ECONNREFUSED` / CFE `Failover initialization failed: undefined`
 The dataplane has no path to AWS service endpoints (you turned off the external Self-IP EIPs). Set **`provisionS3Endpoint=true`** and redeploy — it provisions the S3 + EC2 + Secrets Manager endpoints CFE and AS3 need ([Step 9](#9-air-gap-choose-your-public-ip-toggles-and-endpoints)). (CFE on GovCloud also requires the `scopingName` storage discovery rather than tag-based discovery; this is already wired into the runtime-init configs via the `cfeStorageName` instance tag.)
