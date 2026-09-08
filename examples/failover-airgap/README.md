@@ -29,9 +29,9 @@ make is served by a VPC endpoint.
 > ### ✅ Status: lab-validated
 > Deployed and failover-tested end to end in `us-gov-east-1` on **2026-09-08** (3-NIC PAYG,
 > BIG-IP 17.5.1.6-0.0.25, CFE 2.4.0). VIP failover was verified in **both** directions and
-> converged in **~6 seconds each way**, measured from an in-VPC client at a 0.5 s poll
-> interval. That is a single small sample in one environment - measure it in your own
-> before committing to an RTO.
+> converged in **6-10 seconds**, measured from an in-VPC client at a 0.5 s poll interval
+> (individual runs: 9.58 s, ~6 s, 9.58 s). Run-to-run variance is real. Quote 10 seconds for
+> headroom, and measure in your own environment before committing to an RTO.
 >
 > **➡️ New here? Start with [AIRGAP-GUIDE.md](AIRGAP-GUIDE.md)** - a complete step-by-step
 > deployment walkthrough with architecture diagrams, Session Manager and GUI access, a

@@ -518,7 +518,7 @@ This is entirely private and works with **zero internet egress**. The EC2 API ca
 > EIP-based solution. Since it was written, [`examples/failover-airgap`](../failover-airgap/README.md)
 > has been built to do the whole thing declaratively — routes, tagging, source/destination
 > checking, the CFE declaration and Session Manager access — and was deployed and
-> failover-tested end to end in `us-gov-east-1` on **2026-09-08**, converging in **~6 seconds
+> failover-tested end to end in `us-gov-east-1` on **2026-09-08**, converging in **6-10 seconds
 > in both directions**. Unless you specifically need to retrofit an existing EIP-based stack,
 > **use that template instead** and follow [AIRGAP-GUIDE.md](../failover-airgap/AIRGAP-GUIDE.md).
 >
@@ -646,7 +646,7 @@ Test in **both** directions — IAM and endpoint problems sometimes surface on o
 
 **Reachability beyond the VPC.** Route-based failover gives you VPC-internal reachability. Clients arriving over Direct Connect, VPN, or a Transit Gateway need the VIP prefix propagated into **those** route tables as well. Straightforward, but it is a conversation with the customer's network team and should be in the design, not discovered during testing.
 
-**Convergence.** Measured at **~6 seconds in both directions** on `examples/failover-airgap` in `us-gov-east-1` (2026-09-08; 3-NIC PAYG 17.5.1.6, in-VPC client polling at 0.5 s, last-good to first-good response). This is better than route-based failover is often assumed to be — earlier drafts of this guide estimated "tens of seconds". It is still a single small sample in one environment, so **measure it in your own before committing to an RTO**, and quote a figure with headroom.
+**Convergence.** Measured at **6-10 seconds in both directions** on `examples/failover-airgap` in `us-gov-east-1` (2026-09-08; 3-NIC PAYG 17.5.1.6, in-VPC client polling at 0.5 s, last-good to first-good; individual runs 9.58 s / ~6 s / 9.58 s). This is better than route-based failover is often assumed to be — earlier drafts of this guide estimated "tens of seconds" — but run-to-run variance is real. It remains a small sample in one environment, so **measure it in your own before committing to an RTO**, and quote a figure with headroom.
 
 **Monitoring must check the route, not just CFE.** CFE writes `taskState: SUCCEEDED` / `Failover Complete` even when it performs zero route operations, and `cloud-failover/inspect` still looks healthy. A health check that only watches CFE's own status will miss a total VIP outage. Compare the **actual route target** against the **actual active device**.
 

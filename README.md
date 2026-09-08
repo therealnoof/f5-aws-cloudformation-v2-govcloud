@@ -8,7 +8,7 @@
 >
 > **➡️ Start here — pick the one that matches your environment:**
 > - [**`examples/failover/GOVCLOUD-GUIDE.md`**](./examples/failover/GOVCLOUD-GUIDE.md) — the standard GovCloud failover pair, with Elastic IPs. A complete first-time-operator walkthrough.
-> - [**`examples/failover-airgap/AIRGAP-GUIDE.md`**](./examples/failover-airgap/AIRGAP-GUIDE.md) — the **fully air-gapped** variant: **no public IP addresses anywhere**, VIP failover between Availability Zones by route rather than by Elastic IP, and management through AWS Systems Manager Session Manager. Lab-validated 2026-09-08 in `us-gov-east-1`, failing over in **~6 seconds** in both directions.
+> - [**`examples/failover-airgap/AIRGAP-GUIDE.md`**](./examples/failover-airgap/AIRGAP-GUIDE.md) — the **fully air-gapped** variant: **no public IP addresses anywhere**, VIP failover between Availability Zones by route rather than by Elastic IP, and management through AWS Systems Manager Session Manager. Lab-validated 2026-09-08 in `us-gov-east-1`, failing over in **6-10 seconds** in both directions.
 >
 > **⚠️ Scope:** Only the **failover (active/standby HA pair)** solution using the **3-NIC PAYG** runtime-init config is currently GovCloud-adapted and validated — in both the EIP-based (`examples/failover`) and air-gap (`examples/failover-airgap`) forms. The other solutions (**autoscale**, **quickstart** standalone) and the other failover variants (**2-NIC**, **BYOL**, non-`-with-app`) are **not yet** GovCloud-enabled — they still carry the upstream configuration and would need the same treatment. That is planned future work.
 

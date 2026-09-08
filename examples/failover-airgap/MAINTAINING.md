@@ -12,8 +12,8 @@ duplication, and this file is what keeps the two from drifting.
 | **Validated** | 2026-09-08, `us-gov-east-1` |
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
 | **Result** | Deployed end to end; VIP failover verified in **both** directions |
-| **Convergence** | ~6 s each way (in-VPC client, 0.5 s poll, last-good to first-good) |
-| **Defect found and fixed** | Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below |
+| **Convergence** | 6-10 s each way (in-VPC client, 0.5 s poll, last-good to first-good; runs: 9.58 s / ~6 s / 9.58 s) |
+| **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. |
 
 Re-run the [validation checklist](AIRGAP-GUIDE.md#6-validating-the-deployment) and both
 failover directions after any change to the CFE declaration, the network module's route
@@ -108,6 +108,14 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   `SelfIp` class requires one. Lab-observed 2026-09-08: it broke failover in one
   direction only, because the CFE declaration is config-synced, so both devices shared
   one list and only the device named by the masked entry failed to match.
+
+- **Both instances must receive `cfeS3Bucket`.** Upstream `failover.yaml` passed it only to
+  `BigIpInstance01`; `BigIpInstance02` fell back to the module default `''`, so its
+  `cfeStorageName` tag rendered as `.s3.<region>.amazonaws.com` and CFE failed every state
+  read with `getaddrinfo ENOTFOUND`. Config-sync eventually repairs the declaration from the
+  peer, which is why this stayed hidden - but during onboarding, exactly when instance 02 may
+  become active first, its CFE is dead. Lab-observed 2026-09-08: a fresh stack reached
+  `CREATE_COMPLETE` with the VIP black-holed. Fixed in both parents; keep them symmetric.
 
 - **Source/dest check** is disabled through the ENI resource, so it survives reboots and
   redeploys. Do not replace it with a post-deploy script.

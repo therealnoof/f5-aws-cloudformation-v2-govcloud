@@ -12,9 +12,9 @@ differently.
 
 > ### ✅ Lab-validated
 > Deployed and failover-tested end to end in `us-gov-east-1` on **2026-09-08**, on the
-> 3-NIC PAYG BIG-IP 17.5.1.6 pair. VIP failover was measured in **both** directions and
-> converged in **~6 seconds each way**. See [section 8](#8-testing-failover) for the
-> method and the raw numbers.
+> 3-NIC PAYG BIG-IP 17.5.1.6 pair. VIP failover was verified in **both** directions across
+> several runs and converged in **6-10 seconds**. Quote **10 seconds** to a customer for
+> headroom. See [section 8](#8-testing-failover) for the method and the raw numbers.
 
 ---
 
@@ -151,7 +151,7 @@ sequenceDiagram
     RT->>B: 10.99.0.0/24 → eni of failover02
     B-->>C: response
 
-    Note over C,B: measured: ~6 seconds end to end
+    Note over C,B: measured: 6-10 seconds end to end
 ```
 
 The client never changes the address it is talking to. No addressing changes anywhere —
@@ -772,7 +772,22 @@ curl -sku admin:"$PW" https://10.0.1.11/mgmt/shared/cloud-failover/declare \
 # → ['10.0.0.11/24', '10.0.4.11']  ❌ see troubleshooting
 ```
 
-**Check 5 — the VIP answers.** From a jump host shell:
+**Check 5 — the active device and the route target must agree.** This one catches a real
+condition seen in the lab: the template points all three routes at instance A when the stack
+is built, but the initial election can make **instance B** active. CFE only acts on a
+failover *transition*, so coming up active at boot does not move the routes - and the stack
+reaches `CREATE_COMPLETE` with a VIP that has never passed traffic.
+
+Compare the `deviceStatus` from check 3 with the route target from check 2. If they name
+different devices, run **one** failover from the active device to sync them:
+
+```bash
+tmsh run sys failover standby
+```
+
+Then re-check. This is a normal post-deployment step, not a fault.
+
+**Check 6 — the VIP answers.** From a jump host shell:
 
 ```bash
 curl -sk https://10.99.0.100/ | grep -oE 'failover0[12][.a-z]*'
@@ -886,15 +901,19 @@ Then fail back and repeat.
 | **Date / Region** | 2026-09-08, `us-gov-east-1` |
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, CFE 2.4.0, DO 1.47.0, AS3 3.56.0 |
 | **Method** | 0.5 s poll from an in-VPC client, last-good to first-good response |
-| **A → B** | ~6 seconds |
-| **B → A** | ~6 seconds |
+| **A → B** | 6 – 9.6 seconds |
+| **B → A** | 6 – 9.6 seconds |
 
-This is a **small sample in one environment**. Measure it in your own before committing to
-a Recovery Time Objective, and quote a figure with headroom — **10 seconds** is a
-reasonable number to put in front of a customer for a design measured at 6.
+Individual runs, all last-good to first-good: **9.58 s**, **~6 s**, **9.58 s**. The same
+pair on the same build converged in 6 seconds once and 9.6 seconds twice, so **run-to-run
+variance is real** — treat any single measurement as indicative, not definitive.
+
+This is a small sample in one environment. Measure it in your own before committing to a
+Recovery Time Objective, and quote a figure with headroom — **10 seconds** is a reasonable
+number to put in front of a customer for a design measured between 6 and 10.
 
 > Note this is *better* than route-based failover is usually assumed to be. Earlier drafts
-> of this guide estimated "tens of seconds"; the measured behaviour is well under ten.
+> of this guide estimated "tens of seconds"; the measured behaviour stays under ten.
 
 ---
 

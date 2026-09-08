@@ -857,6 +857,13 @@ Resources:
             - S3Region: !Ref 's3BucketRegion'
               S3Bucket: !Ref 's3BucketName'
           - !Ref 'bigIpRuntimeInitConfig02'
+        cfeS3Bucket: !If
+          - useDefaultCfeS3Bucket
+          - !Join
+            - ''
+            - - !Ref 'uniqueString'
+              - '-bigip-high-availability-solution'
+          - !Ref 'cfeS3Bucket'
         cfeTag: !Ref 'cfeTag'
         bigIpPeerExternalSelfIp: !Ref 'bigIpExternalSelfIp01'
         disableSourceDestCheck: 'true'
