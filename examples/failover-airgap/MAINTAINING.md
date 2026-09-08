@@ -12,7 +12,7 @@ duplication, and this file is what keeps the two from drifting.
 | `modules/network/network.yaml` | **Shared** | Gains two optional parameters, both default-off: `routeTableFailoverTag` (tags every route table `f5_cloud_failover_label=<value>`; this template passes `cfeTag`) and `provisionSsmEndpoints` (adds the `ssm`, `ssmmessages`, `ec2messages` interface endpoints). The endpoint security group's condition widened to "S3 endpoints **or** SSM endpoints". With the defaults the module behaves exactly as before. |
 | `modules/access/access.yaml` | **Shared, unchanged** | `solutionType: failover` selects `BigIpHighAvailabilityAccessRole`, which already grants `ec2:ReplaceRoute`, `ec2:CreateRoute` and `ec2:DescribeRouteTables`. The write actions are conditioned on the route table carrying `f5_cloud_failover_label` = `cfeTag`, which is why the network tag above is mandatory. |
 | `modules/dag/dag.yaml` | **Shared, unchanged** | Called with `numberPublicExternalIpAddresses=0` and `numberPublicMgmtIpAddresses=0`, which creates no EIP resources at all. |
-| `modules/bigip-standalone/bigip-standalone.yaml` | **Shared** | Gains four optional parameters (`disableSourceDestCheck`, `externalVipAddress`, `externalVipCidr`, `bigIpPeerExternalSelfIp`), three instance tags carrying the last three to runtime-init, and one output (`bigIpExternalInterfaceId`). All default to the previous behaviour. |
+| `modules/bigip-standalone/bigip-standalone.yaml` | **Shared** | Gains four optional parameters (`disableSourceDestCheck`, `externalVipAddress`, `externalVipCidr`, `bigIpPeerExternalSelfIp`), four instance tags carrying values to runtime-init (`externalVipAddress`, `externalVipCidr`, `peerExternalSelfIp`, and `externalSelfIp` - the last exposing the already-existing bare `externalSelfIp` parameter), and one output (`bigIpExternalInterfaceId`). All default to the previous behaviour. |
 | `modules/bastion/bastion.yaml` | **Shared, unchanged** | Fallback only (`provisionBastion`, default `false`). |
 | `modules/ssm-jump/ssm-jump.yaml` | **New** | Private Session Manager jump host: IAM role with `AmazonSSMManagedInstanceCore`, egress-only security group, IMDSv2-only launch template, Amazon Linux 2023 via the SSM public AMI parameter. Only this solution uses it so far; nothing about it is air-gap specific, so `examples/failover` could adopt it later. |
 | `modules/function`, `modules/application` | **Shared, unchanged** | |
@@ -61,8 +61,8 @@ Each config is the corresponding `-with-app.yaml` file plus:
 2. One AS3 `Service_Address` on the alien VIP in the default (floating) traffic group,
    instead of two per-AZ addresses with `trafficGroup: none`. Two services (HTTP, HTTPS)
    instead of four.
-3. Three tag-sourced `runtime_parameters`: `EXTERNAL_VIP_ADDRESS`, `EXTERNAL_VIP_CIDR`,
-   `PEER_SELF_IP_EXTERNAL`.
+3. Four tag-sourced `runtime_parameters`: `EXTERNAL_VIP_ADDRESS`, `EXTERNAL_VIP_CIDR`,
+   `OWN_SELF_IP_EXTERNAL`, `PEER_SELF_IP_EXTERNAL`.
 4. A `Demo_Responder` iRule in `Shared`, attached to both services. It only acts when the
    pool has no active members. Nothing about it is air-gap specific; `examples/failover`
    could adopt it, in which case keep the two copies identical.
@@ -84,6 +84,17 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
 - **The route-table tag is load-bearing twice.** CFE discovers route tables by it, and
   IAM denies `ReplaceRoute` on a table without it. Do not make `routeTableFailoverTag`
   optional in this parent.
+- **CFE next-hop addresses must be bare - no `/mask`.** The `failoverRoutes` next-hop
+  list is matched against each device's own local addresses to decide which hop is
+  "mine". `10.0.0.11/24` never matches `10.0.0.11`, so the device whose address carries
+  the mask finds no next hop, performs **zero** route operations, and still reports
+  `taskState: SUCCEEDED` / `Failover Complete` - a silent no-op that looks healthy in
+  `inspect`. This is why the list uses the tag-sourced `OWN_SELF_IP_EXTERNAL` and not
+  `SELF_IP_EXTERNAL`: the latter comes from AWS metadata with a mask because the DO
+  `SelfIp` class requires one. Lab-observed 2026-09-08: it broke failover in one
+  direction only, because the CFE declaration is config-synced, so both devices shared
+  one list and only the device named by the masked entry failed to match.
+
 - **Source/dest check** is disabled through the ENI resource, so it survives reboots and
   redeploys. Do not replace it with a post-deploy script.
 - **Shared-module parameters must keep defaults that preserve existing behaviour.** The

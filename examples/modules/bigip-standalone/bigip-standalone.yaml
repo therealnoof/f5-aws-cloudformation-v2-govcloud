@@ -1223,6 +1223,8 @@ Resources:
           Value: !Ref 'externalVipAddress'
         - Key: externalVipCidr
           Value: !Ref 'externalVipCidr'
+        - Key: externalSelfIp
+          Value: !Ref 'externalSelfIp'
         - Key: peerExternalSelfIp
           Value: !Ref 'bigIpPeerExternalSelfIp'
         - Key: vip1Addr
@@ -1489,6 +1491,8 @@ Resources:
           Value: !Ref 'externalVipAddress'
         - Key: externalVipCidr
           Value: !Ref 'externalVipCidr'
+        - Key: externalSelfIp
+          Value: !Ref 'externalSelfIp'
         - Key: peerExternalSelfIp
           Value: !Ref 'bigIpPeerExternalSelfIp'
         - Key: vip1Addr
@@ -1749,6 +1753,8 @@ Resources:
           Value: !Ref 'externalVipAddress'
         - Key: externalVipCidr
           Value: !Ref 'externalVipCidr'
+        - Key: externalSelfIp
+          Value: !Ref 'externalSelfIp'
         - Key: peerExternalSelfIp
           Value: !Ref 'bigIpPeerExternalSelfIp'
         - Key: vip1Addr

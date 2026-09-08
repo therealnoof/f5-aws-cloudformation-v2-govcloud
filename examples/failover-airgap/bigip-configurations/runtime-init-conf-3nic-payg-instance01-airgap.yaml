@@ -152,7 +152,14 @@ extension_services:
               defaultNextHopAddresses:
                 discoveryType: static
                 items:
-                  - "{{{SELF_IP_EXTERNAL}}}"
+                  # Both entries MUST be bare addresses (no /mask). CFE matches these
+                  # against the device's own local addresses to pick its next hop, and
+                  # an entry like "10.0.0.11/24" never matches "10.0.0.11". Do NOT use
+                  # SELF_IP_EXTERNAL here - it carries a mask because the DO SelfIp
+                  # class requires one. Both values come from instance tags instead.
+                  # This declaration is config-synced, so the list is identical on both
+                  # devices and must contain both external Self IPs.
+                  - "{{{OWN_SELF_IP_EXTERNAL}}}"
                   - "{{{PEER_SELF_IP_EXTERNAL}}}"
     - extensionType: as3
       type: inline
@@ -414,6 +421,11 @@ runtime_parameters:
     tagProvider:
       environment: aws
       key: externalVipCidr
+  - name: OWN_SELF_IP_EXTERNAL
+    type: tag
+    tagProvider:
+      environment: aws
+      key: externalSelfIp
   - name: PEER_SELF_IP_EXTERNAL
     type: tag
     tagProvider:

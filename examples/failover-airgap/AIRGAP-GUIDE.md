@@ -246,6 +246,39 @@ something recreated the interface outside the stack.
 for exactly `externalVipCidr`. Check step 2. A prefix mismatch between the route and the
 scoping range is the usual cause when someone edits one side.
 
+**Failover "succeeds" but the route never moves, in one direction only.** The classic
+symptom: A-to-B works, B-to-A leaves the VIP dark for as long as you care to wait, and
+CFE reports success on both. On the device that failed, `/var/log/restnoded/restnoded.log`
+shows:
+
+```
+warning: [f5-cloud-failover] Next hop address to use is empty: 10.0.0.11,10.0.2.11  10.0.0.11/24,10.0.4.11
+finest:  [f5-cloud-failover] Next hop address: undefined
+finest:  [f5-cloud-failover] routesDiscovered: {"operations":[]}
+info:    [f5-cloud-failover] No route operations to run
+info:    [f5-cloud-failover] Failover Complete
+```
+
+CFE resolved no next hop, so it ran **zero** route operations - and still wrote
+`taskState: SUCCEEDED` to the state file. `inspect` looks healthy throughout; the only
+evidence is those lines and a route that still points at the standby.
+
+The cause is a `/mask` on a next-hop entry. CFE matches the `defaultNextHopAddresses`
+items against the device's own local addresses, and `10.0.0.11/24` never equals
+`10.0.0.11`. Because the CFE declaration is config-synced, both devices share one list,
+so only the device named by the masked entry fails - hence the one-directional failure.
+Check what is actually deployed:
+
+```bash
+curl -sku admin:"$PW" https://localhost/mgmt/shared/cloud-failover/declare \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin)["declaration"]; print(d["failoverRoutes"]["routeGroupDefinitions"][0]["defaultNextHopAddresses"])'
+```
+
+Every item must be a bare address. If any carries a mask, the runtime-init config is
+using `SELF_IP_EXTERNAL` (masked, because the DO `SelfIp` class needs it) instead of the
+tag-sourced `OWN_SELF_IP_EXTERNAL`. Fixed in this directory as of 2026-09-08; re-stage
+the bucket and redeploy if you are running an older copy.
+
 **`UnauthorizedOperation` on `ReplaceRoute` in `/var/log/restnoded/restnoded.log`.** The
 route table has lost its `f5_cloud_failover_label` tag, or `cfeTag` was changed on one side
 only. The IAM condition is on the tag value matching `cfeTag` exactly.
