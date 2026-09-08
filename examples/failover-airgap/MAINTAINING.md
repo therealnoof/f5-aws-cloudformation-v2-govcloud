@@ -23,7 +23,7 @@ table tagging, or the `externalSelfIp` / `peerExternalSelfIp` instance tags.
 
 | Component | Status | Notes |
 |---|---|---|
-| `modules/network/network.yaml` | **Shared** | Gains two optional parameters, both default-off: `routeTableFailoverTag` (tags every route table `f5_cloud_failover_label=<value>`; this template passes `cfeTag`) and `provisionSsmEndpoints` (adds the `ssm`, `ssmmessages`, `ec2messages` interface endpoints). The endpoint security group's condition widened to "S3 endpoints **or** SSM endpoints". With the defaults the module behaves exactly as before. |
+| `modules/network/network.yaml` | **Shared** | Gains two optional parameters, both default-off: `routeTableFailoverTag` (tags every route table `f5_cloud_failover_label=<value>`; this template passes `cfeTag`) `provisionSsmEndpoints` (adds the `ssm`, `ssmmessages`, `ec2messages` interface endpoints), and `provisionNatGateways` (default `true` = historical behaviour; `false` removes the NAT gateways, their Elastic IPs and the `0.0.0.0/0` route from the private route tables, leaving the route tables themselves - and therefore the VPC endpoint associations and VIP routes - intact). The endpoint security group's condition widened to "S3 endpoints **or** SSM endpoints". With the defaults the module behaves exactly as before. |
 | `modules/access/access.yaml` | **Shared, unchanged** | `solutionType: failover` selects `BigIpHighAvailabilityAccessRole`, which already grants `ec2:ReplaceRoute`, `ec2:CreateRoute` and `ec2:DescribeRouteTables`. The write actions are conditioned on the route table carrying `f5_cloud_failover_label` = `cfeTag`, which is why the network tag above is mandatory. |
 | `modules/dag/dag.yaml` | **Shared, unchanged** | Called with `numberPublicExternalIpAddresses=0` and `numberPublicMgmtIpAddresses=0`, which creates no EIP resources at all. |
 | `modules/bigip-standalone/bigip-standalone.yaml` | **Shared** | Gains four optional parameters (`disableSourceDestCheck`, `externalVipAddress`, `externalVipCidr`, `bigIpPeerExternalSelfIp`), four instance tags carrying values to runtime-init (`externalVipAddress`, `externalVipCidr`, `peerExternalSelfIp`, and `externalSelfIp` - the last exposing the already-existing bare `externalSelfIp` parameter), and one output (`bigIpExternalInterfaceId`). All default to the previous behaviour. |
@@ -55,7 +55,8 @@ diff examples/failover/failover.yaml examples/failover-airgap/failover-airgap.ya
   default runtime-init config URLs point at this directory.
 - **DAG:** both public-address counts `0`, `cfeVipTag=''`.
 - **Network:** `setPublicSubnet1='false'`, `provisionS3Endpoint='true'`,
-  `provisionSsmEndpoints` from `provisionSsmAccess`, `routeTableFailoverTag=cfeTag`.
+  `provisionSsmEndpoints` from `provisionSsmAccess`, `routeTableFailoverTag=cfeTag`,
+  `provisionNatGateways='false'` (no NAT gateways, no Elastic IPs, no egress).
 - **New resources:** `SsmJump` nested stack; `VipRoutePublic`, `VipRoutePrivateA`,
   `VipRoutePrivateB` - `AWS::EC2::Route` entries for `externalVipCidr` targeting instance
   A's external ENI.
@@ -77,7 +78,12 @@ Each config is the corresponding `-with-app.yaml` file plus:
    instead of four.
 3. Four tag-sourced `runtime_parameters`: `EXTERNAL_VIP_ADDRESS`, `EXTERNAL_VIP_CIDR`,
    `OWN_SELF_IP_EXTERNAL`, `PEER_SELF_IP_EXTERNAL`.
-4. A `Demo_Responder` iRule in `Shared`, attached to both services. It only acts when the
+4. NTP set to the Amazon Time Sync Service (`169.254.169.123`) instead of `pool.ntp.org`.
+   With `provisionNatGateways='false'` there is no route to the internet, so public NTP
+   would silently fail - and clock skew breaks device trust, config-sync and SigV4 request
+   signing. DNS was already the link-local VPC resolver (`169.254.169.253`), so it needed
+   no change.
+5. A `Demo_Responder` iRule in `Shared`, attached to both services. It only acts when the
    pool has no active members. Nothing about it is air-gap specific; `examples/failover`
    could adopt it, in which case keep the two copies identical.
 
@@ -116,6 +122,13 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   peer, which is why this stayed hidden - but during onboarding, exactly when instance 02 may
   become active first, its CFE is dead. Lab-observed 2026-09-08: a fresh stack reached
   `CREATE_COMPLETE` with the VIP black-holed. Fixed in both parents; keep them symmetric.
+
+- **Nothing in the private subnets may need internet egress.** `provisionNatGateways='false'`
+  removes the default route entirely. Everything the solution needs is reachable without it:
+  S3 artifacts via the gateway endpoint, AWS APIs via interface endpoints, DNS and NTP via
+  link-local addresses. Anything added later that expects egress - notably
+  `provisionExampleApp='true'`, which pulls a container image - will fail. Re-enable NAT
+  deliberately if that is required, and accept that it reintroduces two Elastic IPs.
 
 - **Source/dest check** is disabled through the ENI resource, so it survives reboots and
   redeploys. Do not replace it with a post-deploy script.

@@ -17,6 +17,9 @@ Conditions:
   deployEndpointSecurityGroup: !Or
     - !Condition deployS3Endpoint
     - !Condition deploySsmEndpoints
+  deployNatGateways: !Equals
+    - !Ref 'provisionNatGateways'
+    - 'true'
   tagRouteTablesForFailover: !Not
     - !Equals
       - !Ref 'routeTableFailoverTag'
@@ -55,6 +58,18 @@ Conditions:
         - 'false'
       - !Condition subnet2C
     - !Condition az3
+  natGatewayGroupA: !And
+    - !Condition naclPrivateA
+    - !Condition deployNatGateways
+  natGatewayGroupB: !And
+    - !Condition naclPrivateB
+    - !Condition deployNatGateways
+  natGatewayGroupC: !And
+    - !Condition naclPrivateC
+    - !Condition deployNatGateways
+  natGatewayGroupD: !And
+    - !Condition naclPrivateD
+    - !Condition deployNatGateways
   naclPrivateD: !And
     - !Or
       - !Equals
@@ -365,25 +380,25 @@ Outputs:
     Description: network nested stack name
     Value: !Ref "AWS::StackName"
   natEipA:
-    Condition: naclPrivateA
+    Condition: natGatewayGroupA
     Description: NAT IP Address for subnets A
     Value: !Ref 'natEipA'
     Export:
       Name: !Sub '${AWS::StackName}-natEipA'
   natEipB:
-    Condition: naclPrivateB
+    Condition: natGatewayGroupB
     Description: NAT IP Address for subnets B
     Value: !Ref 'natEipB'
     Export:
       Name: !Sub '${AWS::StackName}-natEipB'
   natEipC:
-    Condition: naclPrivateC
+    Condition: natGatewayGroupC
     Description: NAT IP Address for subnets C
     Value: !Ref 'natEipC'
     Export:
       Name: !Sub '${AWS::StackName}-natEipC'
   natEipD:
-    Condition: naclPrivateD
+    Condition: natGatewayGroupD
     Description: NAT IP Address for subnets D
     Value: !Ref 'natEipD'
     Export:
@@ -496,6 +511,21 @@ Parameters:
       - 'false'
     Default: 'false'
     Description: Value of true provisions the VPC endpoints required for air-gapped / no-egress deployments - an S3 Gateway endpoint (Cloud Failover state storage, runtime-init artifacts) plus EC2, Secrets Manager, and CloudFormation Interface endpoints (Cloud Failover Extension API calls, secret retrieval, and the BIG-IP cfn-signal stack-success signal). Required when the BIG-IP dataplane has no internet egress (e.g. provisionPublicIpExternalSelf=false), or CFE initialization and the CloudFormation success signal will fail.
+    Type: String
+  provisionNatGateways:
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+    Description: Value of true (the default, and the historical behaviour) creates a NAT
+      gateway and an Elastic IP per private subnet group, and a 0.0.0.0/0 route to it in
+      each private route table, giving those subnets outbound internet access. Set to false
+      for a genuinely air-gapped VPC - no NAT gateways, no Elastic IPs, and no default route
+      out of the private subnets. The private route tables themselves are still created, so
+      VPC endpoints and any route-based failover entries are unaffected. Only set false when
+      everything in those subnets reaches AWS through VPC endpoints and needs no other
+      internet egress; note that NTP over the internet and container image pulls (the demo
+      application) both stop working.
     Type: String
   provisionSsmEndpoints:
     AllowedValues:
@@ -3337,7 +3367,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   privateSubnetsRouteA:
-    Condition: naclPrivateA
+    Condition: natGatewayGroupA
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref privateRouteTableA
@@ -3477,7 +3507,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   privateSubnetsRouteB:
-    Condition: naclPrivateB
+    Condition: natGatewayGroupB
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref privateRouteTableB
@@ -3617,7 +3647,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   privateSubnetsRouteC:
-    Condition: naclPrivateC
+    Condition: natGatewayGroupC
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref privateRouteTableC
@@ -3757,7 +3787,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   privateSubnetsRouteD:
-    Condition: naclPrivateD
+    Condition: natGatewayGroupD
     Type: 'AWS::EC2::Route'
     Properties:
       RouteTableId: !Ref privateRouteTableD
@@ -4049,7 +4079,7 @@ Resources:
       SubnetId: !Ref subnet7D
       RouteTableId: !Ref privateRouteTableD
   natEipA:
-    Condition: naclPrivateA
+    Condition: natGatewayGroupA
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::EIP'
     Properties:
@@ -4071,7 +4101,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natEipB:
-    Condition: naclPrivateB
+    Condition: natGatewayGroupB
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::EIP'
     Properties:
@@ -4093,7 +4123,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natEipC:
-    Condition: naclPrivateC
+    Condition: natGatewayGroupC
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::EIP'
     Properties:
@@ -4115,7 +4145,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natEipD:
-    Condition: naclPrivateD
+    Condition: natGatewayGroupD
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::EIP'
     Properties:
@@ -4137,7 +4167,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natGatewayA:
-    Condition: naclPrivateA
+    Condition: natGatewayGroupA
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::NatGateway'
     Properties:
@@ -4162,7 +4192,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natGatewayB:
-    Condition: naclPrivateB
+    Condition: natGatewayGroupB
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::NatGateway'
     Properties:
@@ -4187,7 +4217,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natGatewayC:
-    Condition: naclPrivateC
+    Condition: natGatewayGroupC
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::NatGateway'
     Properties:
@@ -4212,7 +4242,7 @@ Resources:
         - Key: owner
           Value: !Ref owner
   natGatewayD:
-    Condition: naclPrivateD
+    Condition: natGatewayGroupD
     DependsOn: vpcGatewayAttachment
     Type: 'AWS::EC2::NatGateway'
     Properties:

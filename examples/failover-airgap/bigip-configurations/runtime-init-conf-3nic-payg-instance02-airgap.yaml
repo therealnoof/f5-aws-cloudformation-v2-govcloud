@@ -56,9 +56,13 @@ extension_services:
             ltm: nominal
           My_Ntp:
             class: NTP
+            # Amazon Time Sync Service. Link-local, so it works with no internet egress and
+            # no VPC endpoint - required here because provisionNatGateways='false' removes
+            # the default route out of the private subnets. Do NOT revert this to
+            # pool.ntp.org: NTP would silently fail, and clock skew breaks device trust,
+            # config-sync and SigV4 request signing.
             servers:
-              - 0.pool.ntp.org
-              - 1.pool.ntp.org
+              - 169.254.169.123
             timezone: UTC
           My_Dns:
             class: DNS
@@ -266,9 +270,13 @@ extension_services:
             ltm: nominal
           My_Ntp:
             class: NTP
+            # Amazon Time Sync Service. Link-local, so it works with no internet egress and
+            # no VPC endpoint - required here because provisionNatGateways='false' removes
+            # the default route out of the private subnets. Do NOT revert this to
+            # pool.ntp.org: NTP would silently fail, and clock skew breaks device trust,
+            # config-sync and SigV4 request signing.
             servers:
-              - 0.pool.ntp.org
-              - 1.pool.ntp.org
+              - 169.254.169.123
             timezone: UTC
           My_Dns:
             class: DNS

@@ -995,6 +995,7 @@ Resources:
         numSubnets: !Ref 'numSubnets'
         setPublicSubnet1: 'false'
         provisionS3Endpoint: 'true'
+        provisionNatGateways: 'false'
         provisionSsmEndpoints: !If [deploySsm, 'true', 'false']
         routeTableFailoverTag: !Ref 'cfeTag'
         subnetMask: !Ref 'subnetMask'

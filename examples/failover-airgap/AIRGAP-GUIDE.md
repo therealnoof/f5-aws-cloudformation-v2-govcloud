@@ -84,6 +84,23 @@ flowchart TB
     class OP,SSMAPI ext
 ```
 
+**What makes the air gap real.** The private subnets have **no default route** — no NAT
+gateway, no Elastic IP, no path to the internet at all. Everything the solution needs is
+reachable without one:
+
+| Dependency | How it is served with no egress |
+|---|---|
+| Templates, runtime-init installer, extension RPMs, WAF policy | **S3 gateway endpoint**, attached to the private route tables |
+| EC2, Secrets Manager, CloudFormation, Systems Manager APIs | **Interface endpoints** with private DNS |
+| DNS | **`169.254.169.253`** — the link-local VPC resolver |
+| NTP | **`169.254.169.123`** — Amazon Time Sync, link-local |
+
+> ⚠️ **Anything you add that expects internet egress will fail**, including
+> `provisionExampleApp='true'`, which pulls a container image. If you need egress, set
+> `provisionNatGateways` back to `true` in the `Network` stack parameters — and accept that
+> it reintroduces two Elastic IPs and a route out of the BIG-IP management and internal
+> subnets, which an assessor will find.
+
 **The moving pieces:**
 
 | Piece | What it is | Why it is here |
@@ -1062,6 +1079,15 @@ just the `failover-airgap/` directory. Re-run the `s3 sync` from
 
 A VPC endpoint problem. Check the interface endpoints exist, that their security group
 allows 443 from the VPC CIDR, and that the stack Region matches the bucket Region.
+
+### Clustering fails, config-sync breaks, or AWS calls are rejected as expired
+
+Check the clock first: `date` on both devices, and `tmsh list sys ntp`. This solution has no
+internet egress, so NTP **must** be the link-local Amazon Time Sync address
+`169.254.169.123`. If someone has reverted it to `pool.ntp.org`, time sync fails silently
+and the drift eventually breaks device trust, config-sync, and SigV4 request signing (AWS
+rejects signatures outside a ~15-minute window, which surfaces as puzzling auth errors from
+CFE).
 
 ### `Sending telemetry failed: ECONNREFUSED 35.199.173.84:443`
 

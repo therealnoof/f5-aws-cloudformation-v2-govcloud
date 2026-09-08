@@ -42,13 +42,15 @@ make is served by a VPC endpoint.
 
 | | `examples/failover` | `examples/failover-airgap` |
 |---|---|---|
-| Elastic IPs | Up to 5 (management, external Self IPs, VIP) | **None** |
+| Elastic IPs | Up to 5 (management, external Self IPs, VIP) **plus 2 for NAT gateways** | **None at all** |
 | Application VIP | Secondary private IP per AZ + one floating EIP | **One address outside the VPC CIDR** (`externalVipAddress`) |
 | What CFE moves on failover | The EIP association (`failoverAddresses`) | **The target ENI of the VIP route** in every route table (`failoverRoutes`) |
 | Source/dest check on external ENIs | Enabled (AWS default) | **Disabled** (required for an alien-IP VIP) |
 | Route tables | Untagged | Tagged `f5_cloud_failover_label=cfeTag`, one VIP route each |
 | VPC endpoints | Optional (`provisionS3Endpoint`) | **Always** (S3, EC2, Secrets Manager, CloudFormation), plus SSM, SSM Messages and EC2 Messages when `provisionSsmAccess=true` |
 | Management access | Public EIP (eval) or bastion | **Session Manager** through a private jump host (`provisionSsmAccess`, default); public bastion only as a fallback (`provisionBastion`) |
+| NAT gateways | 2 (one per AZ), each with an Elastic IP, giving the private subnets a `0.0.0.0/0` route to the internet | **None** (`provisionNatGateways='false'`). No default route out of the private subnets |
+| DNS / NTP | VPC resolver / `pool.ntp.org` (needs egress) | VPC resolver / **Amazon Time Sync `169.254.169.123`** - both link-local, no egress |
 | Public-IP toggles | 4 parameters | Removed - fixed to none |
 
 **Demo responder.** With `provisionExampleApp=false` (the default) the VIP's pool has no
