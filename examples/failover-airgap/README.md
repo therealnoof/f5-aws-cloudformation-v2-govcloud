@@ -89,6 +89,8 @@ The parameters are those of `failover.yaml` **minus** the public-IP toggles
 | `externalVipAddress` | No | `10.99.0.100` | The application VIP. Must be outside the VPC CIDR and inside `externalVipCidr`. Bound to the AS3 virtual servers on both devices. |
 | `externalVipCidr` | No | `10.99.0.0/24` | Prefix routed to the active BIG-IP. One `AWS::EC2::Route` for exactly this prefix is created per route table, and the CFE declaration manages routes for exactly this prefix. |
 | `provisionSsmAccess` | No | `true` | Deploy a private jump host managed by Systems Manager Session Manager (`modules/ssm-jump`) in the BIG-IP management subnet, plus the SSM interface endpoints. No public IP, no inbound rules, no SSH key. |
+| `ssmJumpInstanceType` | No | `t3.micro` | Instance type for the jump host. It only terminates SSM sessions and forwards ports, so the smallest type in the Region is normally enough. |
+| `ssmJumpCustomImageId` | No | `''` | AMI for the jump host, overriding the Amazon Linux 2023 lookup. Leave empty for the normal case. Set it if the AWS-published SSM parameter `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64` is not available in your Region, or if a hardened base image is required. Any image works provided the SSM Agent is installed and starts at boot. |
 | `provisionBastion` | No | `false` | Fallback only: deploy the Linux bastion (`modules/bastion`) in the first external subnet **with a public IP** and SSH open to `restrictedSrcAddressMgmt`. |
 
 See `failover-airgap-parameters.json` for a complete example parameter set.

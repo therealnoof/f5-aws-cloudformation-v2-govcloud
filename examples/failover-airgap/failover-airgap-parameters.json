@@ -168,6 +168,14 @@
     "ParameterValue": ""
   },
   {
+    "ParameterKey": "ssmJumpCustomImageId",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "ssmJumpInstanceType",
+    "ParameterValue": "t3.micro"
+  },
+  {
     "ParameterKey": "subnetMask",
     "ParameterValue": "24"
   },

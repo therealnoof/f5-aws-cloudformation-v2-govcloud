@@ -132,7 +132,13 @@ extension_services:
               algorithm: AES256
           scopingName: "{{{CFE_STORAGE_NAME}}}"
         failoverAddresses:
-          enabled: true
+          # Disabled deliberately. This solution has no Elastic IPs and no secondary
+          # private IP addresses, so address failover has nothing to relocate - the VIP
+          # moves by route instead (failoverRoutes below). Leaving it enabled makes CFE
+          # scan for addresses on every failover and log the empty result, which is noise
+          # in restnoded.log exactly where genuine route errors need to be visible.
+          # Re-enable only if EIPs or secondary private IPs are added to this design.
+          enabled: false
           scopingTags:
             f5_cloud_failover_label: "{{{FAILOVER_TAG}}}"
           requireScopingTags: false

@@ -42,6 +42,8 @@ Metadata:
           default: Management access / Ingress
         Parameters:
           - provisionSsmAccess
+          - ssmJumpInstanceType
+          - ssmJumpCustomImageId
           - provisionBastion
           - restrictedSrcAddressMgmt
           - restrictedSrcAddressApp
@@ -163,6 +165,10 @@ Metadata:
       sshKey:
         default: Supply the public key that will be used for SSH authentication to
           the BIG-IP and application virtual machines
+      ssmJumpCustomImageId:
+        default: Session Manager jump host AMI (leave empty for the Amazon Linux 2023 lookup)
+      ssmJumpInstanceType:
+        default: Session Manager jump host instance type
       subnetMask:
         default: Subnet Mask
       uniqueString:
@@ -530,6 +536,24 @@ Parameters:
     Description: Supply the public key that will be used for SSH authentication to
       the BIG-IP, application, and bastion virtual machines. If left empty, one will
       be created.
+    Type: String
+  ssmJumpCustomImageId:
+    AllowedPattern: '^$|^ami-([0-9a-f]{8}|[0-9a-f]{17})$'
+    ConstraintDescription: Must be empty or a valid AMI ID (ami-xxxxxxxx or ami-xxxxxxxxxxxxxxxxx).
+    Default: ''
+    Description: Optional AMI ID for the Session Manager jump host, used instead of the
+      default lookup. Leave empty to resolve the current Amazon Linux 2023 image from the
+      AWS-published SSM parameter, which is the normal case. Set this only if that
+      parameter is not published in your Region (verify with "aws ssm get-parameter --name
+      /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"), or if your
+      organization requires a hardened base image. Any image works provided the SSM Agent
+      is installed and starts at boot. Only used when provisionSsmAccess is true.
+    Type: String
+  ssmJumpInstanceType:
+    Default: t3.micro
+    Description: EC2 instance type for the Session Manager jump host. It only terminates
+      SSM sessions and forwards ports, so the smallest type available in the Region is
+      normally enough. Only used when provisionSsmAccess is true.
     Type: String
   subnetMask:
     ConstraintDescription: 'Subnet mask must be in value of 16-28. Total number of
@@ -993,6 +1017,8 @@ Resources:
                 - !GetAtt
                   - Network
                   - Outputs.subnetsA
+        customImageId: !Ref 'ssmJumpCustomImageId'
+        instanceType: !Ref 'ssmJumpInstanceType'
         uniqueString: !Ref 'uniqueString'
         vipCidr: !Ref 'externalVipCidr'
         vpc: !GetAtt

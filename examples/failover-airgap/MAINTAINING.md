@@ -34,7 +34,8 @@ diff examples/failover/failover.yaml examples/failover-airgap/failover-airgap.ya
   `provisionPublicIpExternalSelf`, `provisionExternalVip`, `provisionS3Endpoint`,
   `bigIpExternalVip01`, `bigIpExternalVip02`, `cfeVipTag`. Their values are fixed: no
   public IPs anywhere, no secondary private IPs, VPC endpoints always on.
-- **Added parameters:** `externalVipAddress`, `externalVipCidr`, `provisionSsmAccess`, `provisionBastion` (default `false` here).
+- **Added parameters:** `externalVipAddress`, `externalVipCidr`, `provisionSsmAccess`,
+  `provisionBastion` (default `false` here), `ssmJumpInstanceType`, `ssmJumpCustomImageId`.
 - **Instances:** `disableSourceDestCheck='true'`, the three VIP/peer parameters, all EIP
   allocation IDs `''`, `numExternalPublicIpAddresses=0`, `numSecondaryPrivateIpAddresses=0`,
   default runtime-init config URLs point at this directory.
@@ -53,7 +54,10 @@ Each config is the corresponding `-with-app.yaml` file plus:
 
 1. `failoverRoutes` in the CFE declaration (`routeGroupDefinitions`, discovered by
    `f5_cloud_failover_label`, `scopingAddressRanges` = `externalVipCidr`, static next hops =
-   both external Self IPs).
+   both external Self IPs), and `failoverAddresses` set to `enabled: false` - there are no
+   EIPs and no secondary private IPs here, so address failover has nothing to relocate and
+   only adds empty-result noise to `restnoded.log`. This is the one CFE difference that
+   inverts the source file rather than adding to it.
 2. One AS3 `Service_Address` on the alien VIP in the default (floating) traffic group,
    instead of two per-AZ addresses with `trafficGroup: none`. Two services (HTTP, HTTPS)
    instead of four.

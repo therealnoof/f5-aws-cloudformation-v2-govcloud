@@ -80,6 +80,21 @@ which is authorised by IAM and logged in CloudTrail. From your workstation you
 port-forward *through* it to a BIG-IP management address (section 4a). BIG-IP itself
 cannot run the SSM Agent, which is why the hop exists.
 
+> **Check this before you create the stack.** The jump host resolves its image from an
+> AWS-published SSM parameter. If that parameter is not present in your Region the nested
+> stack fails at create time, which is an annoying way to lose a deployment window:
+>
+> ```bash
+> aws ssm get-parameter --region "$REGION" \
+>   --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+>   --query 'Parameter.Value' --output text
+> ```
+>
+> If that returns an AMI ID, you are fine. If it errors, pass any AMI that has the SSM
+> Agent installed and starting at boot (Amazon Linux 2 and 2023 both do, as do most
+> hardened AL2023 images) as `ssmJumpCustomImageId`. Use `ssmJumpInstanceType` if
+> `t3.micro` is unavailable in the Region.
+
 **`provisionBastion` (default `false`).** The fallback for environments where Systems
 Manager is not permitted: the repository's Linux bastion in the first external subnet
 **with a public IP** and SSH open to `restrictedSrcAddressMgmt`. That is a public address
