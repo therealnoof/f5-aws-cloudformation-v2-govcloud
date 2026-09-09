@@ -1294,6 +1294,72 @@ diagnosis rather than a repair — fix the bucket and redeploy.
 > **Not this problem?** If runtime-init *did* run (hostname is set) but onboarding still
 > failed, the error is in `/var/log/f5-bigip-runtime-init.log`, not the boot log.
 
+### `REMOTE HOST IDENTIFICATION HAS CHANGED!` on `localhost:2222`
+
+Expected after a redeploy, and not a security problem. The port-forwarding commands in
+section 5 map a **local** port (`2222`, `8443`, `8444`) to a BIG-IP inside the VPC. That
+local port is not a stable identity — each deployment points it at a brand new instance
+with a new host key — so SSH correctly notices the key changed and correctly cannot tell
+whether that is a redeploy or an attack.
+
+What actually protects this connection is the SSM tunnel underneath it: IAM-authorised,
+TLS, and logged in CloudTrail. Clear the stale entry and reconnect:
+
+```bash
+ssh-keygen -R '[localhost]:2222'
+ssh -i ~/.ssh/<your-key>.pem -p 2222 admin@localhost
+```
+
+If you rebuild often, keep the tunnel's host keys out of your real `known_hosts` entirely:
+
+```bash
+ssh -i ~/.ssh/<your-key>.pem -p 2222 \
+  -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no admin@localhost
+```
+
+> Use those two options **only** for this tunnel. They disable a check that is meaningful
+> for any host with a durable identity; they are safe here solely because the local port is
+> a rotating alias and the SSM layer is doing the authentication.
+
+### The admin password is rejected while the stack is still building
+
+Not necessarily a failure. Declarative Onboarding sets the admin password partway through
+onboarding, so between instance boot and runtime-init completing there is simply no
+password to accept. If `describe-stacks` still shows `CREATE_IN_PROGRESS` and no
+`CREATE_FAILED` events, wait.
+
+Check how long it has really been, rather than how long it feels:
+
+```bash
+aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+  --query "Stacks[0].CreationTime" --output text
+
+aws cloudformation describe-stack-events --region "$REGION" --stack-name "$STACK" \
+  --query "StackEvents[?ResourceStatus=='CREATE_FAILED'].[LogicalResourceId,ResourceStatusReason]" \
+  --output text
+```
+
+Empty output from the second command means nothing has failed. Build times legitimately
+range from 6 minutes to 40+ because of the clustering self-heal, so a long build is not by
+itself a symptom.
+
+To get on the box before the password exists, authenticate with the **EC2 key pair**
+instead — that works from first boot. Forward the port from your workstation so the private
+key never has to be copied to the jump host:
+
+```bash
+# terminal 1 - JUMP HOST instance id, forwarding to the BIG-IP's management address
+aws ssm start-session --region "$REGION" --target "$JUMP" \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["10.0.1.11"],"portNumber":["22"],"localPortNumber":["2222"]}'
+
+# terminal 2
+ssh -i ~/.ssh/<your-key>.pem -p 2222 admin@localhost
+```
+
+Then use the `hostname` test from the first entry in this section to tell "still working" from
+"never started".
+
 ### `SessionManagerPlugin is not found`
 
 The Session Manager plugin is not installed on your workstation. It is a separate install
