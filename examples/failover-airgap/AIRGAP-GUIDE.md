@@ -238,7 +238,27 @@ something is wrong.
 - **A subscription to the BIG-IP marketplace image** for your Region.
 - **A staging S3 bucket** holding the templates and BIG-IP artifacts (step 4.4).
 
-### 3.2 On your workstation
+### 3.2 Three machines — know which one you are typing on
+
+This guide moves between three machines, and most wasted time comes from running a command
+on the wrong one. Commands are labelled throughout:
+
+| Label | Machine | How you get there | What lives there |
+|---|---|---|---|
+| 🖥️ **WORKSTATION** | Your laptop | You are already on it | The AWS CLI, your git clone, your `.pem` file, the shell variables `$REGION` / `$BUCKET` / `$PREFIX` / `$STACK` |
+| 🔒 **JUMP HOST** | The `t3.micro` in the VPC | `aws ssm start-session --target <jump host id>` | An in-VPC shell for reaching the BIG-IPs and curling the VIP. No repo, no AWS credentials of yours |
+| ⚙️ **BIG-IP** | `10.0.1.11` / `10.0.5.11` | `ssh admin@10.0.x.11` from the jump host, or a forwarded port | The onboarding logs, `tmsh`, the CFE state. **No git, no repo, and none of your shell variables** |
+
+Two consequences worth internalising, because both produce answers that look real but are not:
+
+- **Shell variables do not travel.** `$BUCKET` and friends are set on the workstation only.
+  A `curl "https://${BUCKET}.s3..."` run on the BIG-IP silently becomes
+  `https://.s3..amazonaws.com/`, returns nothing, and any `grep -c` over it reports `0` — a
+  clean-looking "not found" that is really "never asked".
+- **The repo is not on the BIG-IP.** `git` and `grep` against `examples/...` only work on
+  the workstation.
+
+**Prerequisites on the workstation:**
 
 - **A clone of this repository.** You run `aws s3 sync` from its root.
 - **The AWS CLI v2**, configured for your GovCloud account.
@@ -543,9 +563,57 @@ done
 
 ### 4.6 Pre-flight checks
 
-Two lookups that fail *cheaply* now instead of expensively mid-deploy.
+Three checks that fail *cheaply* now instead of expensively mid-deploy.
 
-**The jump host image.** The jump host resolves its AMI from an AWS-published SSM
+**Is the bucket serving the templates you think it is?** 🖥️ WORKSTATION
+
+The highest-value check in this guide, and the one worth running every single time.
+**CloudFormation and the BIG-IPs read the bucket, never your working tree.** A stale bucket
+deploys perfectly and then behaves like an older version, which reads as a code bug and is
+not one.
+
+Checking a single file is not enough. The air-gap behaviour is split across two: the module
+`bigip-standalone.yaml` *accepts* the installer flags, and the parent `failover-airgap.yaml`
+*supplies* them. The module parameter defaults to an empty string deliberately, so the other
+examples stay unaffected — which means **a current module plus a stale parent raises no error
+at all**. It quietly reverts to the internet-dependent behaviour and then fails looking
+exactly like an air-gap networking problem.
+
+```bash
+B="https://${BUCKET}.s3.${REGION}.amazonaws.com/${PREFIX}"
+
+# sanity first: must print the template's first line, not XML and not nothing
+curl -s "$B/failover-airgap/failover-airgap.yaml" | head -1
+
+check() { printf '%-26s got=%-3s want=%s\n' "$2" "$(curl -s "$B/$1" | grep -c "$3")" "$4"; }
+
+check failover-airgap/failover-airgap.yaml           "parent: flags"     bigIpRuntimeInitInstallerFlags 2
+check failover-airgap/failover-airgap.yaml           "parent: gpg param" bigIpRuntimeInitGpgKeyUrl      6
+check failover-airgap/failover-airgap.yaml           "parent: cfe gate"  provisionCfeS3Bucket           1
+check modules/bigip-standalone/bigip-standalone.yaml "module: flags"     INSTALLER_FLAGS                6
+check modules/bigip-standalone/bigip-standalone.yaml "module: cfe gate"  provisionCfeS3Bucket           3
+```
+
+Every `got` must equal its `want`. A mismatch means that file did not sync — re-upload it
+explicitly, then re-check:
+
+```bash
+aws s3 cp examples/failover-airgap/failover-airgap.yaml \
+  "s3://${BUCKET}/${PREFIX}/failover-airgap/failover-airgap.yaml" --region "$REGION"
+```
+
+> **Why `s3 cp` rather than another `s3 sync`.** `sync` compares size and modification time
+> and skips a local file that is not newer than the object already in the bucket. A `git
+> merge` or checkout can leave a file whose timestamp loses that comparison, so `sync`
+> reports success having uploaded nothing at all. `cp` always overwrites. If a marker is
+> still wrong after a sync, reach for `cp`.
+
+> **All five reporting `0` usually means the URL was wrong, not that the files are stale** —
+> which is what the sanity `head -1` is for. It is also why these are marked
+> 🖥️ WORKSTATION: run them on a BIG-IP and `${BUCKET}` is unset, the URL collapses to
+> `https://.s3..amazonaws.com/`, and every count is a meaningless `0`.
+
+**The jump host image.** 🖥️ WORKSTATION The jump host resolves its AMI from an AWS-published SSM
 parameter. If that parameter is not present in your Region, the nested stack fails at
 create time:
 
@@ -559,7 +627,7 @@ An AMI ID means you are fine. An error means you must pass your own image as
 `ssmJumpCustomImageId` — any AMI works provided the SSM Agent is installed and starts at
 boot (Amazon Linux 2 and 2023 both do, as do most hardened AL2023 builds).
 
-**The BIG-IP image.** The template looks up the BIG-IP AMI by name pattern, and
+**The BIG-IP image.** 🖥️ WORKSTATION The template looks up the BIG-IP AMI by name pattern, and
 availability differs by Region:
 
 ```bash
@@ -845,7 +913,7 @@ curl -sku admin:"$PW" https://localhost:8443/mgmt/shared/cloud-failover/inspect 
 
 | Symptom | Cause |
 |---|---|
-| `SessionManagerPlugin is not found` | The plugin is not installed — see [section 3.2](#32-on-your-workstation), then run `hash -r`. |
+| `SessionManagerPlugin is not found` | The plugin is not installed — see [section 3.2](#32-three-machines--know-which-one-you-are-typing-on), then run `hash -r`. |
 | `TargetNotConnected` | The jump host has not registered with Systems Manager. See [troubleshooting](#targetnotconnected-or-the-jump-host-never-appears-in-systems-manager). |
 | Browser says "connection refused" | The `start-session` command is not running, or you closed its window. Re-run it. |
 | `Port 8443 in use` | Something else on your machine holds that port. Change `localPortNumber` to any free port (e.g. `8543`) and browse there instead. |
@@ -1363,7 +1431,7 @@ Then use the `hostname` test from the first entry in this section to tell "still
 ### `SessionManagerPlugin is not found`
 
 The Session Manager plugin is not installed on your workstation. It is a separate install
-from the AWS CLI — see [section 3.2](#32-on-your-workstation). After installing, run
+from the AWS CLI — see [section 3.2](#32-three-machines--know-which-one-you-are-typing-on). After installing, run
 `hash -r` so your shell picks up the new binary.
 
 ### `TargetNotConnected`, or the jump host never appears in Systems Manager
