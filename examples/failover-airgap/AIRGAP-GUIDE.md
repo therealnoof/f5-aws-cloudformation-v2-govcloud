@@ -1080,6 +1080,47 @@ just the `failover-airgap/` directory. Re-run the `s3 sync` from
 A VPC endpoint problem. Check the interface endpoints exist, that their security group
 allows 443 from the VPC CIDR, and that the stack Region matches the bucket Region.
 
+### `Sync Failed` — "Static route gateway ... is not directly connected via an interface"
+
+The full error, seen on the active device:
+
+```
+Sync error on failover02.local: Load failed from /Common/failover01.local
+01070330:3: Static route gateway 10.0.0.1 is not directly connected via an interface.
+```
+
+Each BIG-IP's default route points at its **own** subnet's gateway, which differs per
+Availability Zone (`10.0.0.1` in AZ A, `10.0.4.1` in AZ B). That route lives in the
+`/LOCAL_ONLY` folder precisely so it is *not* synced. If the folder has been assigned to the
+sync device group, it syncs anyway and the peer rejects it.
+
+Check the folder, not the route:
+
+```bash
+tmsh list sys folder /LOCAL_ONLY
+```
+
+You want `device-group none` and `traffic-group traffic-group-local-only`. If it shows
+`device-group failoverGroup`, that is the fault. Fix it on the affected device:
+
+```bash
+tmsh modify sys folder /LOCAL_ONLY device-group none traffic-group traffic-group-local-only
+tmsh save sys config
+tmsh run cm config-sync to-group failoverGroup
+tmsh show cm sync-status
+```
+
+**Why it happens:** the clustering self-heal creates the device group out of band, because
+Declarative Onboarding's own clustering deadlocks on the documented device-trust startup
+bug. That out-of-band creation can leave `/LOCAL_ONLY` stamped with the new device group.
+The self-heal now detects and corrects this automatically (2026-09-08), so a current
+deployment should not hit it — the manual fix above is for stacks built before that change.
+
+**Note that failover keeps working while this is broken**, because network failover and
+CFE's route updates do not depend on config-sync. What stops is configuration propagation
+between the devices, so the pair drifts silently. Treat a red sync status as urgent even
+though traffic looks healthy.
+
 ### Clustering fails, config-sync breaks, or AWS calls are rejected as expired
 
 Check the clock first: `date` on both devices, and `tmsh list sys ntp`. This solution has no

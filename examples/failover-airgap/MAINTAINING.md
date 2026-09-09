@@ -123,6 +123,16 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   become active first, its CFE is dead. Lab-observed 2026-09-08: a fresh stack reached
   `CREATE_COMPLETE` with the VIP black-holed. Fixed in both parents; keep them symmetric.
 
+- **`/LOCAL_ONLY` must never belong to the sync device group.** It holds the default route,
+  whose gateway is the device's own subnet gateway and therefore differs per AZ. Assigned to
+  `failoverGroup`, that route syncs and the peer rejects it
+  (`01070330:3: Static route gateway ... is not directly connected`), leaving the cluster
+  permanently `Sync Failed` while failover itself keeps working - so it is easy to miss.
+  Creating the device group out of band, which `cluster-heal.sh` must do, can leave the
+  folder stamped with it; the script now corrects this on every device. Lab-observed
+  2026-09-08. The correct state is `device-group none` and
+  `traffic-group traffic-group-local-only`.
+
 - **Nothing in the private subnets may need internet egress.** `provisionNatGateways='false'`
   removes the default route entirely. Everything the solution needs is reachable without it:
   S3 artifacts via the gateway endpoint, AWS APIs via interface endpoints, DNS and NTP via

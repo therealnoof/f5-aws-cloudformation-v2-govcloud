@@ -123,6 +123,21 @@ if ! tmsh list cm device-group failoverGroup one-line >/dev/null 2>&1; then
   exit 0
 fi
 
+# 4c. The /LOCAL_ONLY folder must NOT belong to the sync device group. It holds the default
+# route, whose gateway is the device's own external subnet gateway and therefore DIFFERS per
+# Availability Zone. If the folder is assigned to failoverGroup, that route is synced to the
+# peer, fails validation there ("01070330:3: Static route gateway <ip> is not directly
+# connected via an interface"), and the cluster sits permanently in Sync Failed - config
+# changes stop propagating, while failover itself keeps working, so it is easy to miss.
+# Creating the device group out-of-band (which this script must do, because DO's clustering
+# deadlocks) can leave the folder stamped with the new group. Lab-observed 2026-09-08.
+# Idempotent, and runs on both devices because each has its own copy of the folder.
+if tmsh list sys folder /LOCAL_ONLY 2>/dev/null | grep -q "device-group failoverGroup"; then
+  echo "/LOCAL_ONLY is assigned to failoverGroup -> excluding it from config-sync"
+  tmsh modify sys folder /LOCAL_ONLY device-group none traffic-group traffic-group-local-only 2>/dev/null
+  tmsh save sys config >/dev/null 2>&1
+fi
+
 # device-group exists but not yet In Sync. Act on any sync recommendation for THIS device
 # (covers datasync-global-dg / datasync-device groups; direction-correct).
 tmsh show cm sync-status 2>/dev/null | grep -i "Synchronize this device to group" | while read -r line; do
