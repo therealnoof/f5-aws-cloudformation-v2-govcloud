@@ -294,7 +294,10 @@ Parameters:
     Type: String
   bigIpCustomImageId:
     Default: ''
-    Description: Provide BIG-IP AMI ID you wish to deploy.
+    Description: 'OPTIONAL - leave blank. Blank looks up the marketplace image matched by
+      the bigIpImage pattern, which is the normal case. Supply an AMI ID only to pin a
+      specific image or to use a custom one, in which case bigIpImage is ignored. A custom
+      image must still carry a valid BIG-IP licence or marketplace subscription.'
     MaxLength: 255
     Type: String
   bigIpHostname01:
@@ -318,9 +321,14 @@ Parameters:
     Type: String
   bigIpInstanceProfile:
     Default: ''
-    Description: Enter the name of an existing IAM instance profile with applied IAM
-      policy to be associated to the BIG-IP virtual machine(s). Leave default to create
-      a new instance profile.
+    Description: 'OPTIONAL - leave blank. Blank creates an instance profile with the IAM
+      policy the BIG-IPs need. For this solution that includes ec2:DescribeRouteTables plus
+      ec2:CreateRoute and ec2:ReplaceRoute, which Cloud Failover Extension calls to move the
+      VIP route, granted only on resources tagged f5_cloud_failover_label matching cfeTag.
+      Supply the name of an existing profile only if your organisation requires centrally
+      managed roles. It must grant those same actions AND scope them to the same tag value,
+      or failover will silently do nothing - CFE reports success even when every route
+      operation was denied.'
     Type: String
   bigIpInstanceType:
     ConstraintDescription: Must be a valid EC2 instance type for BIG-IP
@@ -329,13 +337,17 @@ Parameters:
     Type: String
   bigIpLicenseKey01:
     Default: ''
-    Description: Supply the F5 BYOL license key for BIG-IP instance 01. Leave this
-      parameter blank if deploying the PAYG solution.
+    Description: 'OPTIONAL - leave blank. The default bigIpImage is a PAYG (hourly
+      marketplace) image, which is licensed automatically and needs no key. Supply an F5 BYOL
+      licence key for BIG-IP instance 01 only if you have also pointed bigIpImage or
+      bigIpCustomImageId at a BYOL image.'
     Type: String
   bigIpLicenseKey02:
     Default: ''
-    Description: Supply the F5 BYOL license key for BIG-IP instance 02. Leave this
-      parameter blank if deploying the PAYG solution.
+    Description: 'OPTIONAL - leave blank. The default bigIpImage is a PAYG (hourly
+      marketplace) image, which is licensed automatically and needs no key. Supply an F5 BYOL
+      licence key for BIG-IP instance 02 only if you have also pointed bigIpImage or
+      bigIpCustomImageId at a BYOL image.'
     Type: String
   bigIpPeerAddr:
     Default: '10.0.1.11'
@@ -383,8 +395,11 @@ Parameters:
       and dashes. It cannot contain underscores, end with a dash, have consecutive
       periods, or use dashes adjacent to periods.'
     Default: ''
-    Description: 'Supply a unique name for a CFE S3 bucket created and used by Cloud
-      Failover Extension.'
+    Description: 'OPTIONAL - leave blank. Blank names the bucket
+      <uniqueString>-bigip-high-availability-solution and creates it for you. Supply a name
+      only if you need to control it. Either way the bucket is CREATED by this stack, so the
+      name must not already exist in the account. Cloud Failover Extension uses it to store
+      the state it needs to coordinate failover between the two devices.'
     Type: String
   cfeTag:
     Description: Cloud Failover deployment tag value.
@@ -459,8 +474,13 @@ Parameters:
     Type: String
   bigIpSecretArn:
     Default: ''
-    Description: The ARN of an existing AWS Secrets Manager secret where the BIG-IP
-      password used for clustering is stored. If left empty, a secret will be created.
+    Description: 'OPTIONAL, but recommended for anything beyond a lab. The ARN of an
+      existing Secrets Manager secret holding the BIG-IP admin password. Both devices read
+      the SAME secret - that shared credential is what lets them establish device trust, so
+      it is the password you will use to log in. Leave blank and the stack creates a secret
+      named <uniqueString>-bigIpSecret with a GENERATED password that is only 10 characters
+      and excludes punctuation. That is weak for a government deployment, so supply your own
+      secret with a password that meets your policy.'
     Type: String
   numAzs:
     Default: 2
@@ -551,9 +571,13 @@ Parameters:
     Type: String
   sshKey:
     Default: ''
-    Description: Supply the public key that will be used for SSH authentication to
-      the BIG-IP, application, and bastion virtual machines. If left empty, one will
-      be created.
+    Description: 'OPTIONAL - the NAME of an existing EC2 key pair (for example
+      f5-airgap-key), not a public key string and not a file path. Leave blank and the stack
+      creates a key pair named <uniqueString>-keyPair, whose private key AWS stores in
+      Systems Manager Parameter Store under /ec2/keypair/<key-pair-id>. In this air-gapped
+      design SSH keys matter less than usual: there is no public IP on any BIG-IP and access
+      is through Session Manager, where you log in as admin with the password from
+      bigIpSecretArn rather than with a key.'
     Type: String
   ssmJumpCustomImageId:
     AllowedPattern: '^$|^ami-([0-9a-f]{8}|[0-9a-f]{17})$'

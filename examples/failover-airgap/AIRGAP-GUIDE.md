@@ -344,17 +344,23 @@ STACK=failover-airgap
 
 The BIG-IPs read their admin password from AWS Secrets Manager at boot. Both devices use
 the **same** secret — that shared credential is also what lets them establish device trust
-with each other.
+with each other, and it is the password you will log in with.
 
 ```bash
 aws secretsmanager create-secret --region "$REGION" \
   --name f5-bigip-admin-password \
   --secret-string 'CHANGE-ME-to-a-strong-password'
 
-# Note the ARN it returns — you need it in step 4.6
+# Note the ARN it returns — you need it in step 4.7
 aws secretsmanager list-secrets --region "$REGION" \
   --query 'SecretList[].[Name,ARN]' --output table
 ```
+
+> **You can skip this step.** Leave `bigIpSecretArn` blank and the stack creates a secret
+> named `<uniqueString>-bigIpSecret` for you. But the password it generates is only **10
+> characters with punctuation excluded**, which is weak for a government deployment — and
+> because both devices share it, it is also the device-trust credential. Create your own
+> unless this is a throwaway lab. Retrieve a generated one with the command in section 5.3.
 
 ### 4.3 Create an SSH key pair
 
@@ -364,7 +370,13 @@ aws ec2 create-key-pair --region "$REGION" --key-name f5-airgap-key \
 chmod 400 ~/.ssh/f5-airgap-key.pem
 ```
 
-You pass the key pair **name** (`f5-airgap-key`), not the file path.
+You pass the key pair **name** (`f5-airgap-key`), not the file path and not the key text.
+
+> **You can skip this step too.** Leave `sshKey` blank and the stack creates
+> `<uniqueString>-keyPair`, with the private key in Systems Manager Parameter Store under
+> `/ec2/keypair/<key-pair-id>`. SSH keys matter less here than in a normal deployment: no
+> BIG-IP has a public IP, and you reach them through Session Manager logging in as `admin`
+> with the password from your secret, not with a key.
 
 ### 4.4 Stage the S3 bucket
 
@@ -566,26 +578,53 @@ wildcarded, e.g. `*17.5.1.6-0.0.25*PAYG-Best Plus 25Mbps*`.
 
 ### 4.7 Fill in the parameters
 
-Edit `examples/failover-airgap/failover-airgap-parameters.json`. Four values are genuinely
-required:
+Edit `examples/failover-airgap/failover-airgap-parameters.json`.
+
+**Two parameters have no default — CloudFormation will not launch without them:**
 
 | Parameter | Value |
 |---|---|
-| `bigIpSecretArn` | The full secret ARN from step 4.2 |
-| `sshKey` | The key pair **name** from step 4.3 (e.g. `f5-airgap-key`) |
-| `restrictedSrcAddressMgmt` | Source CIDR allowed to reach BIG-IP management |
-| `restrictedSrcAddressApp` | Source CIDR allowed to reach the application |
+| `restrictedSrcAddressMgmt` | Source CIDR allowed to reach BIG-IP management from outside the VPC |
+| `restrictedSrcAddressApp` | Source CIDR allowed to reach the application from outside the VPC |
 
-Also confirm `s3BucketName` and `s3BucketRegion` match your bucket and Region.
+**Two more are optional but you should set them anyway:**
+
+| Parameter | Value | Why not just leave it blank |
+|---|---|---|
+| `bigIpSecretArn` | The full secret ARN from step 4.2 | Blank generates a 10-character password with no punctuation — weak, and it doubles as the device-trust credential |
+| `sshKey` | The key pair **name** from step 4.3 (e.g. `f5-airgap-key`) | Blank creates one, which is fine; set it if you want a key pair you already manage |
+
+**Always confirm these match your bucket**, or the BIG-IPs will fetch the wrong artifacts —
+or none at all:
+
+| Parameter | Must match |
+|---|---|
+| `s3BucketName` | The bucket from step 4.4 |
+| `s3BucketRegion` | That bucket's Region |
+| `artifactLocation` | The prefix you synced to, **with a trailing slash** |
 
 > The security groups already permit the VPC CIDR on management (22, 443) and on the
 > application (80, 443), so the jump host and in-VPC clients work regardless of what you
 > put in `restrictedSrcAddress*`. Those two parameters control access from **outside** the
 > VPC. Set them deliberately rather than leaving them empty by accident.
 
-Everything else can stay at its default. Parameters left empty are optional overrides —
-`bigIpRuntimeInitPackageUrl` and `bigIpRuntimeInitConfig01/02` auto-derive from your bucket
-settings, `cfeS3Bucket` is created for you, and `bigIpLicenseKey*` is BYOL-only.
+Everything else can stay at its default. **Every parameter whose default is an empty string
+is an optional override, not a blank you must fill in** — leaving it empty is the intended
+setting:
+
+| Parameter | What blank does |
+|---|---|
+| `bigIpRuntimeInitPackageUrl` | Derives the installer URL from your bucket settings |
+| `bigIpRuntimeInitGpgKeyUrl` | Derives the `gpg.key` URL from your bucket settings |
+| `bigIpRuntimeInitConfig01` / `02` | Derives the runtime-init config URLs from your bucket settings |
+| `cfeS3Bucket` | Names and creates `<uniqueString>-bigip-high-availability-solution` |
+| `bigIpCustomImageId` | Uses the marketplace image matched by `bigIpImage` |
+| `bigIpInstanceProfile` | Creates a profile with the IAM permissions CFE needs |
+| `bigIpLicenseKey01` / `02` | Correct for PAYG, which is what the default `bigIpImage` is |
+| `ssmJumpCustomImageId` | Uses the current Amazon Linux 2023 AMI |
+
+The console shows the same guidance: each of those descriptions now opens with
+`OPTIONAL - leave blank`.
 
 The full parameter reference is in [README.md](README.md#template-input-parameters).
 
@@ -776,7 +815,7 @@ localhost (unsafe)**; in Firefox, **Advanced → Accept the Risk and Continue**;
 | Field | Value |
 |---|---|
 | Username | `admin` |
-| Password | The value of your `bigIpSecretArn` secret |
+| Password | The value of your `bigIpSecretArn` secret — or of the secret the stack created, if you left that parameter blank (see 5.3) |
 
 Retrieve the password with:
 
@@ -844,6 +883,19 @@ it with:
 aws secretsmanager get-secret-value --region "$REGION" \
   --secret-id <your-secret-arn> --query SecretString --output text
 ```
+
+> **If you left `bigIpSecretArn` blank**, the stack created the secret for you and publishes
+> its ARN as a stack output. Look it up, then read the password:
+>
+> ```bash
+> SECRET=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+>   --query "Stacks[0].Outputs[?OutputKey=='bigIpSecretArn'].OutputValue" --output text)
+> aws secretsmanager get-secret-value --region "$REGION" \
+>   --secret-id "$SECRET" --query SecretString --output text
+> ```
+>
+> Stack outputs only populate at `CREATE_COMPLETE`. Before that this returns `None` — that
+> is too early, not an error.
 
 Alternatively, forward a local port to management SSH and connect from your workstation:
 
