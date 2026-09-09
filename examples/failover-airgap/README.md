@@ -67,8 +67,17 @@ fail over. Route-based failover sidesteps addressing entirely.
 ## Prerequisites
 
 An S3 bucket in the deployment Region holding the modules, this directory, the BIG-IP
-extension RPMs and the runtime-init installer, all readable by the BIG-IPs; an SSH key pair;
-an admin-password secret; and a BIG-IP marketplace image available in the Region.
+extension RPMs, the runtime-init installer and its `gpg.key`, all readable by the BIG-IPs;
+an SSH key pair; an admin-password secret; and a BIG-IP marketplace image available in the
+Region.
+
+> `gpg.key` is easy to miss and its absence is fatal. The runtime-init installer verifies
+> its own RPM against a key it fetches from `f5-cft.s3.amazonaws.com` - a **commercial**
+> partition bucket, unreachable from an air-gapped GovCloud VPC. This template therefore
+> passes `--key <your bucket>/gpg.key` to the installer, so you must stage the key
+> alongside the `.gz.run`. Without it the BIG-IPs never onboard, the admin password is
+> never set, and the stack times out after ~50 minutes. See
+> [AIRGAP-GUIDE.md section 4.4](AIRGAP-GUIDE.md#44-stage-the-s3-bucket).
 
 **[AIRGAP-GUIDE.md sections 3 and 4](AIRGAP-GUIDE.md#3-before-you-start) walk through every
 one of those with commands** - it is self-contained, so you do not need any other document
@@ -135,8 +144,8 @@ directory:
 aws s3 sync examples/ "s3://${BUCKET}/f5-aws-cloudformation-v2/v3.6.0.0/examples/" --region "${REGION}"
 ```
 
-> Never add `--delete` - the runtime-init installer and the three extension RPMs live only
-> in the bucket, not in this repo, and would be removed.
+> Never add `--delete` - the runtime-init installer, its `gpg.key` and the three extension
+> RPMs live only in the bucket, not in this repo, and would be removed.
 
 Then:
 

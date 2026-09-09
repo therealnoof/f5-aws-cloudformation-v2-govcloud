@@ -51,6 +51,7 @@ Metadata:
           default: BIG-IP Configuration
         Parameters:
           - bigIpRuntimeInitPackageUrl
+          - bigIpRuntimeInitGpgKeyUrl
           - bigIpRuntimeInitConfig01
           - bigIpRuntimeInitConfig02
           - bigIpHostname01
@@ -112,6 +113,8 @@ Metadata:
         default: BIG-IP Runtime Init config used for BIGIP instance B
       bigIpRuntimeInitPackageUrl:
         default: Runtime Init Package
+      bigIpRuntimeInitGpgKeyUrl:
+        default: Runtime Init GPG Public Key
       cfeS3Bucket:
         default: CFE S3 bucket
       cfeTag:
@@ -357,6 +360,18 @@ Parameters:
     Default: ''
     Description: URL for the BIG-IP Runtime Init package. Leave blank to auto-derive from
       s3BucketName / s3BucketRegion / artifactLocation (the staged package in your bucket).
+    Type: String
+  bigIpRuntimeInitGpgKeyUrl:
+    Default: ''
+    Description: 'URL for the GPG public key that the BIG-IP Runtime Init installer uses to
+      verify the signature on its own RPM. This is a SEPARATE download from the installer
+      package itself, and F5 hard-codes it to https://f5-cft.s3.amazonaws.com/ - a bucket in
+      the COMMERCIAL AWS partition. A GovCloud VPC with no internet egress cannot reach it,
+      the fetch is fatal, and the BIG-IP never onboards (no admin password, no clustering,
+      stack times out). This template therefore always points the installer at a staged copy.
+      Leave blank to auto-derive gpg.key from s3BucketName / s3BucketRegion / artifactLocation,
+      which requires that you stage gpg.key into your bucket alongside the .gz.run installer.
+      See AIRGAP-GUIDE.md for the one-line command that copies it there.'
     Type: String
   cfeS3Bucket:
     AllowedPattern: '^$|^(?=.{1,61}$)[0-9a-z]+([0-9a-z-.]*[0-9a-z])*$'
@@ -628,6 +643,9 @@ Conditions:
   useDefaultRuntimeInitPackage: !Equals
     - !Ref 'bigIpRuntimeInitPackageUrl'
     - ''
+  useDefaultGpgKeyUrl: !Equals
+    - !Ref 'bigIpRuntimeInitGpgKeyUrl'
+    - ''
 Resources:
   Access:
     Type: 'AWS::CloudFormation::Stack'
@@ -746,6 +764,13 @@ Resources:
             - S3Region: !Ref 's3BucketRegion'
               S3Bucket: !Ref 's3BucketName'
           - !Ref 'bigIpRuntimeInitPackageUrl'
+        bigIpRuntimeInitInstallerFlags: !If
+          - useDefaultGpgKeyUrl
+          - !Sub
+            - '--skip-toolchain-metadata-sync --key https://${S3Bucket}.s3.${S3Region}.amazonaws.com/${artifactLocation}gpg.key'
+            - S3Region: !Ref 's3BucketRegion'
+              S3Bucket: !Ref 's3BucketName'
+          - !Sub '--skip-toolchain-metadata-sync --key ${bigIpRuntimeInitGpgKeyUrl}'
         bigIpRuntimeInitConfig: !If
           - useDefaultRuntimeInitConfig01
           - !Sub
@@ -850,6 +875,13 @@ Resources:
             - S3Region: !Ref 's3BucketRegion'
               S3Bucket: !Ref 's3BucketName'
           - !Ref 'bigIpRuntimeInitPackageUrl'
+        bigIpRuntimeInitInstallerFlags: !If
+          - useDefaultGpgKeyUrl
+          - !Sub
+            - '--skip-toolchain-metadata-sync --key https://${S3Bucket}.s3.${S3Region}.amazonaws.com/${artifactLocation}gpg.key'
+            - S3Region: !Ref 's3BucketRegion'
+              S3Bucket: !Ref 's3BucketName'
+          - !Sub '--skip-toolchain-metadata-sync --key ${bigIpRuntimeInitGpgKeyUrl}'
         bigIpRuntimeInitConfig: !If
           - useDefaultRuntimeInitConfig02
           - !Sub

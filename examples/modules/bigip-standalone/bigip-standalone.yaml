@@ -205,6 +205,7 @@ Metadata:
         Parameters:
           - bigIpRuntimeInitConfig
           - bigIpRuntimeInitPackageUrl
+          - bigIpRuntimeInitInstallerFlags
           - hostname
           - bigIpPeerHostname
           - licenseKey
@@ -265,6 +266,8 @@ Metadata:
         default: Runtime Init Configuration
       bigIpRuntimeInitPackageUrl:
         default: Runtime Init Package
+      bigIpRuntimeInitInstallerFlags:
+        default: Runtime Init Installer Flags
       cost:
         default: Cost Center
       cfeS3Bucket:
@@ -433,6 +436,22 @@ Parameters:
   bigIpRuntimeInitPackageUrl:
     Default: 'https://cdn.f5.com/product/cloudsolutions/f5-bigip-runtime-init/v2.0.3/dist/f5-bigip-runtime-init-2.0.3-1.gz.run'
     Description: URL for BIG-IP Runtime Init package.
+    Type: String
+  bigIpRuntimeInitInstallerFlags:
+    Default: ''
+    Description: 'OPTIONAL - Extra command line flags passed to the f5-bigip-runtime-init
+      self-extracting installer (install_rpm.sh) at boot. Leave empty for the normal
+      internet-connected behaviour. Air-gapped deployments need this because the
+      installer independently fetches two things from the public internet that are
+      NOT covered by bigIpRuntimeInitPackageUrl: (1) the GPG public key used to verify
+      the RPM signature, hard-coded to https://f5-cft.s3.amazonaws.com/... which is a
+      COMMERCIAL partition bucket and therefore unreachable from a GovCloud VPC with no
+      internet egress, and (2) the automation toolchain metadata index. Failure to fetch
+      the GPG key is FATAL - the installer loops on it and onboarding never starts.
+      Typical air-gap value:
+      "--skip-toolchain-metadata-sync --key https://<bucket>.s3.<region>.amazonaws.com/<prefix>/gpg.key"
+      which keeps RPM signature verification intact by pointing at a locally staged copy
+      of the same key. Use --skip-verify instead only if you accept an unverified RPM.'
     Type: String
   cfeS3Bucket:
     Description: Supply a unique name for a CFE S3 bucket created and used by Cloud
@@ -1364,6 +1383,10 @@ Resources:
             - !Ref 'allowUsageAnalytics'
             - |
               '
+            - INSTALLER_FLAGS='
+            - !Ref 'bigIpRuntimeInitInstallerFlags'
+            - |
+              '
             - |
               echo ${SECRET_ID} > /config/cloud/secret_id
             - |
@@ -1401,7 +1424,7 @@ Resources:
             - |
               # Run
             - |
-              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml'
+              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml' ${INSTALLER_FLAGS}
             - |2+
 
             - |
@@ -1632,6 +1655,10 @@ Resources:
             - !Ref 'allowUsageAnalytics'
             - |
               '
+            - INSTALLER_FLAGS='
+            - !Ref 'bigIpRuntimeInitInstallerFlags'
+            - |
+              '
             - |
               echo $SECRET_ID > /config/cloud/secret_id
             - |
@@ -1669,7 +1696,7 @@ Resources:
             - |
               # Run
             - |
-              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml'
+              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml' ${INSTALLER_FLAGS}
             - |2+
 
             - |
@@ -1894,6 +1921,10 @@ Resources:
             - !Ref 'allowUsageAnalytics'
             - |
               '
+            - INSTALLER_FLAGS='
+            - !Ref 'bigIpRuntimeInitInstallerFlags'
+            - |
+              '
             - |
               echo $SECRET_ID > /config/cloud/secret_id
             - |
@@ -1931,7 +1962,7 @@ Resources:
             - |
               # Run
             - |
-              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml'
+              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml' ${INSTALLER_FLAGS}
             - |2+
 
             - |

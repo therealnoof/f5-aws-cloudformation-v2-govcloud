@@ -95,6 +95,29 @@ reachable without one:
 | EC2, Secrets Manager, CloudFormation, Systems Manager APIs | **Interface endpoints** with private DNS |
 | DNS | **`169.254.169.253`** — the link-local VPC resolver |
 | NTP | **`169.254.169.123`** — Amazon Time Sync, link-local |
+| Runtime-init installer's own GPG public key | **A copy staged in your bucket**, selected with `--key` (see below) |
+| Runtime-init installer's toolchain metadata index | **Skipped** with `--skip-toolchain-metadata-sync` |
+
+> 🔑 **The last two rows are the ones that catch people out.** Downloading the
+> runtime-init installer from your bucket is not enough. Once it starts, the installer
+> makes two *further* downloads of its own, to URLs that are hard-coded inside it:
+>
+> 1. **Its GPG public key**, from `https://f5-cft.s3.amazonaws.com/...`. Note the missing
+>    `us-gov` — that is a bucket in the **commercial** AWS partition, so a GovCloud S3
+>    gateway endpoint does not serve it and there is no route to it. This fetch is
+>    **fatal**: the installer loops on a 5-second timeout and never installs, so
+>    runtime-init never runs, the admin password is never set, and the stack sits in
+>    `CREATE_IN_PROGRESS` until it times out ~50 minutes later.
+> 2. **The automation toolchain metadata index.** This one is non-fatal, but it retries
+>    24 times before giving up, adding many minutes to every boot.
+>
+> This template handles both for you. It always passes
+> `--skip-toolchain-metadata-sync --key <your bucket>/gpg.key` to the installer, which is
+> why step 4.4 stages `gpg.key` as a fifth artifact. Signature verification stays **on** —
+> the key is simply served from inside your VPC instead of the public internet. If you
+> would rather not stage the key at all you can set the `bigIpRuntimeInitGpgKeyUrl`
+> parameter to a URL of your own, but do not skip verification unless you accept an
+> unverified RPM.
 
 > ⚠️ **Anything you add that expects internet egress will fail**, including
 > `provisionExampleApp='true'`, which pulls a container image. If you need egress, set
@@ -363,7 +386,19 @@ curl -fL -o f5-appsvcs-3.56.0-10.noarch.rpm \
   https://github.com/F5Networks/f5-appsvcs-extension/releases/download/v3.56.0/f5-appsvcs-3.56.0-10.noarch.rpm
 curl -fL -o f5-cloud-failover-2.4.0-0.noarch.rpm \
   https://github.com/F5Networks/f5-cloud-failover-extension/releases/download/v2.4.0/f5-cloud-failover-2.4.0-0.noarch.rpm
+
+# The GPG public key the installer uses to verify its own RPM signature.
+# Required — see the note in section 1. Without it the BIG-IPs never onboard.
+curl -fL -o gpg.key \
+  https://f5-cft.s3.amazonaws.com/f5-bigip-runtime-init/gpg.key
 ```
+
+> Check what you got: `gpg.key` should be about 3.2 KB and start with
+> `-----BEGIN PGP PUBLIC KEY BLOCK-----`. As of 2026-09 its SHA-256 is
+> `5e329086089056079b32f6828b2e2c6fde5dcae8bef62b1f06308af1ede7072b`
+> (`sha256sum gpg.key`). F5 may rotate the key; a mismatch is not automatically wrong,
+> but a file that does not begin with the PGP header is — you probably captured an
+> HTML error page.
 
 > The RPM versions above match the `extensionHash` values pinned in the runtime-init
 > config files, which the BIG-IP enforces at install time. If you change a version, update
@@ -378,6 +413,7 @@ aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
 aws s3 sync ./examples/ "s3://$BUCKET/$PREFIX/" --region "$REGION"
 
 aws s3 cp f5-bigip-runtime-init-2.0.3-1.gz.run           "s3://$BUCKET/$PREFIX/" --region "$REGION"
+aws s3 cp gpg.key                                        "s3://$BUCKET/$PREFIX/" --region "$REGION"
 aws s3 cp f5-declarative-onboarding-1.47.0-14.noarch.rpm "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
 aws s3 cp f5-appsvcs-3.56.0-10.noarch.rpm                "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
 aws s3 cp f5-cloud-failover-2.4.0-0.noarch.rpm           "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
@@ -479,6 +515,7 @@ for KEY in \
   "${PREFIX}/modules/network/network.yaml" \
   "${PREFIX}/modules/bigip-standalone/bigip-standalone.yaml" \
   "${PREFIX}/f5-bigip-runtime-init-2.0.3-1.gz.run" \
+  "${PREFIX}/gpg.key" \
   "${PREFIX}/bigip-extensions/f5-declarative-onboarding-1.47.0-14.noarch.rpm" \
   "${PREFIX}/bigip-extensions/f5-appsvcs-3.56.0-10.noarch.rpm" \
   "${PREFIX}/bigip-extensions/f5-cloud-failover-2.4.0-0.noarch.rpm" \
@@ -489,7 +526,8 @@ done
 ```
 
 `403` means the policy or Block Public Access setting has not taken effect. `404` on the
-`.run` or an `.rpm` means it was never uploaded — it is not part of `s3 sync`.
+`.run`, `gpg.key` or an `.rpm` means it was never uploaded — none of them are part of
+`s3 sync`.
 
 ### 4.6 Pre-flight checks
 
@@ -1122,6 +1160,87 @@ every build.
 ---
 
 ## 11. Troubleshooting
+
+### The stack hangs for ~50 minutes and the admin password never works
+
+This is the highest-impact air-gap failure, and the symptoms point in a misleading
+direction. What you see:
+
+- `CREATE_IN_PROGRESS` on `BigIpInstance01` / `BigIpInstance02` for 40+ minutes, then a
+  rollback with `WaitCondition timed out`.
+- The admin password from Secrets Manager is rejected at the GUI and over SSH.
+- **The prompt is the giveaway.** Get a shell (section 5.3) and look at it:
+
+```
+[admin@ip-10-0-1-11:Active:Standalone] ~ #     ← default hostname: runtime-init NEVER RAN
+[admin@failover01:Active:Standalone] ~ #       ← hostname was set: runtime-init DID run
+```
+
+An `ip-10-x-x-x` hostname means **onboarding never started**, so nothing downstream
+happened: no admin password (Declarative Onboarding sets it), no cluster, no
+`cfn-signal`, hence the timeout. Chasing the password or Secrets Manager here is a dead
+end — the box never got as far as reading the secret.
+
+**Confirm it, then read the real error:**
+
+```bash
+# Did the installer ever land?
+which f5-bigip-runtime-init          # "no f5-bigip-runtime-init in ..." = never installed
+ls -l /var/log/f5-bigip-runtime-init.log   # missing = it never ran
+
+# The actual error is in the boot log, not the runtime-init log
+grep -A3 'GPG PUB Key' /var/log/cloud/startup-script.log
+```
+
+If you see this, you have the classic air-gap trap:
+
+```
+GPG PUB Key location: https://f5-cft.s3.amazonaws.com/f5-bigip-runtime-init/gpg.key
+curl: (28) Connection timed out after 5000 milliseconds
+```
+
+`f5-cft.s3.amazonaws.com` is in the **commercial** AWS partition. A GovCloud S3 gateway
+endpoint will not serve it and there is no internet route, so the fetch times out
+forever. See the note in section 1 for the full explanation.
+
+**Fix — in order of what to check:**
+
+1. **Is `gpg.key` staged?** It is a separate artifact that `s3 sync` does *not* copy:
+   ```bash
+   curl -sk -o /dev/null -w '%{http_code}\n' \
+     "https://${BUCKET}.s3.${REGION}.amazonaws.com/${PREFIX}/gpg.key"
+   ```
+   Anything but `200` — re-do the `gpg.key` lines in steps 4.4 and 4.5.
+2. **Is your bucket copy of the templates current?** The `--key` flag is passed by
+   `bigip-standalone.yaml`. If your bucket still holds a version from before this fix,
+   re-run the `s3 sync` in step 4.4. A stale bucket deploys cleanly and then fails
+   exactly like this.
+3. **Confirm the flag reached the instance.** On the BIG-IP:
+   ```bash
+   grep -o '\-\-key [^ ]*' /var/lib/cloud/instance/user-data.txt
+   ```
+   Empty output means the instance booted from a template without the fix.
+
+**To recover a box that is already wedged** (useful for testing — it saves a 50-minute
+rebuild). The installer retries forever, so kill it first:
+
+```bash
+sudo pkill -f install_rpm.sh
+
+bash /var/config/rest/downloads/f5-bigip-runtime-init-2.0.3-1.gz.run -- \
+  --cloud aws --skip-toolchain-metadata-sync \
+  --key https://${BUCKET}.s3.${REGION}.amazonaws.com/${PREFIX}/gpg.key
+
+which f5-bigip-runtime-init && \
+  f5-bigip-runtime-init --config-file /config/cloud/runtime-init.conf
+```
+
+The prompt changing to `failover01` is your signal that onboarding completed. This
+unblocks the device but the stack has usually already timed out, so treat it as
+diagnosis rather than a repair — fix the bucket and redeploy.
+
+> **Not this problem?** If runtime-init *did* run (hostname is set) but onboarding still
+> failed, the error is in `/var/log/f5-bigip-runtime-init.log`, not the boot log.
 
 ### `SessionManagerPlugin is not found`
 

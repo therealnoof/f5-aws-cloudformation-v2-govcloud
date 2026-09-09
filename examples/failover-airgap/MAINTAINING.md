@@ -146,6 +146,28 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   `provisionExampleApp='true'`, which pulls a container image - will fail. Re-enable NAT
   deliberately if that is required, and accept that it reintroduces two Elastic IPs.
 
+- **Vendor installers have egress dependencies that reading our templates will not reveal.**
+  Found the hard way on 2026-09-09, the first clean build after NAT was removed. Serving
+  `f5-bigip-runtime-init-2.0.3-1.gz.run` from the bucket is not sufficient: `install_rpm.sh`
+  *inside* the self-extracting archive independently fetches
+  `https://f5-cft.s3.amazonaws.com/f5-bigip-runtime-init/gpg.key` to verify the RPM
+  signature, and separately syncs an automation-toolchain metadata index. The GPG fetch is
+  **fatal and retries indefinitely**; NAT had been silently covering for it. Symptom: BIG-IP
+  prompt still reads `ip-10-0-1-11` (default hostname) after 20+ minutes, no
+  `/var/log/f5-bigip-runtime-init.log`, admin password rejected, stack times out. The error
+  is only in `/var/log/cloud/startup-script.log`.
+
+  Handled by `bigIpRuntimeInitInstallerFlags` on `modules/bigip-standalone`, which the
+  air-gap parent sets to `--skip-toolchain-metadata-sync --key <bucket>/gpg.key`. The
+  parameter defaults to `''` and the flags are appended **unquoted** after the existing
+  single-quoted argument, so an empty value expands to no argument at all and the userdata
+  for every other example is byte-identical to before. Verified by rendering the `Fn::Join`
+  for all three NIC variants with and without flags and diffing.
+
+  To inspect the installer yourself: `bash <the>.gz.run --noexec --target /var/tmp/rti`
+  extracts it without running it. Worth repeating whenever the pinned runtime-init version
+  changes - a new release could add or move a bootstrap fetch.
+
 - **Source/dest check** is disabled through the ENI resource, so it survives reboots and
   redeploys. Do not replace it with a post-deploy script.
 - **Shared-module parameters must keep defaults that preserve existing behaviour.** The
