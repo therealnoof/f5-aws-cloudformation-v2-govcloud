@@ -899,6 +899,7 @@ Resources:
             - - !Ref 'uniqueString'
               - '-bigip-high-availability-solution'
           - !Ref 'cfeS3Bucket'
+        provisionCfeS3Bucket: 'false'
         cfeTag: !Ref 'cfeTag'
         bigIpPeerExternalSelfIp: !Ref 'bigIpExternalSelfIp01'
         disableSourceDestCheck: 'true'

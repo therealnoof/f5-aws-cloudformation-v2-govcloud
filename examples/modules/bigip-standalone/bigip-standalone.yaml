@@ -193,10 +193,14 @@ Conditions:
     - !Equals
       - !Ref 'instanceProfile'
       - ""
-  createCfeS3Bucket: !Not
+  createCfeS3Bucket: !And
+    - !Not
+      - !Equals
+        - !Ref 'cfeS3Bucket'
+        - ''
     - !Equals
-      - !Ref 'cfeS3Bucket'
-      - ''
+      - !Ref 'provisionCfeS3Bucket'
+      - 'true'
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -272,6 +276,8 @@ Metadata:
         default: Cost Center
       cfeS3Bucket:
         default: S3 bucket used as BIGIP storage for Failover solution
+      provisionCfeS3Bucket:
+        default: Create the Failover S3 bucket in this stack
       cfeTag:
         default: CFE Deployment tag value
       imageId:
@@ -458,6 +464,16 @@ Parameters:
       Failover Extension.
     Type: String
     Default: ''
+  provisionCfeS3Bucket:
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: 'Whether THIS stack creates the S3 bucket named by cfeS3Bucket. Both
+      devices in a Cloud Failover pair need the bucket NAME - runtime-init reads it from an
+      instance tag to build the CFE storage endpoint - but only ONE of them may create the
+      bucket, because two stacks creating the same BucketName in parallel is an error. Set
+      this to false on the second device of a pair, leaving cfeS3Bucket populated so its tag
+      is still correct. Default true, which is what a standalone deployment wants.'
+    Type: String
   cfeTag:
     Description: Cloud Failover deployment tag value.
     Type: String

@@ -886,6 +886,7 @@ Resources:
             - - !Ref 'uniqueString'
               - '-bigip-high-availability-solution'
           - !Ref 'cfeS3Bucket'
+        provisionCfeS3Bucket: 'false'
         cfeTag: !Ref 'cfeTag'
         externalSelfPublicIpId: !If [createExternalSelfEip, !GetAtt [Dag, Outputs.bigIpExternalEipAllocationId02], '']
         externalServicePublicIpIds: ''
