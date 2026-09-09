@@ -4,11 +4,11 @@ A complete, first-time-operator walkthrough for deploying an active/standby BIG-
 into AWS GovCloud with **no public IP addresses anywhere**, and an application VIP that
 fails over between Availability Zones **without an Elastic IP**.
 
-This is the companion to [`examples/failover/GOVCLOUD-GUIDE.md`](../failover/GOVCLOUD-GUIDE.md).
-That guide covers the shared GovCloud groundwork — the staging bucket, the admin secret,
-the key pair, the image lookup and the clustering self-heal — and everything in it still
-applies. This guide is self-contained for deployment, and covers what this template does
-differently.
+**This guide is self-contained.** Everything needed to deploy, reach, validate and
+troubleshoot the solution is here — you should not need to open another document to get a
+working stack. [`examples/failover/GOVCLOUD-GUIDE.md`](../failover/GOVCLOUD-GUIDE.md)
+covers the *other* solution in this repository, the EIP-based failover pair; read it only
+if you are deploying that instead, or want more background on GovCloud generally.
 
 > ### ✅ Lab-validated
 > Deployed and failover-tested end to end in `us-gov-east-1` on **2026-09-08**, on the
@@ -29,7 +29,8 @@ differently.
 7. [Seeing it work in a browser](#7-seeing-it-work-in-a-browser)
 8. [Testing failover](#8-testing-failover)
 9. [What to plan for](#9-what-to-plan-for)
-10. [Troubleshooting](#10-troubleshooting)
+10. [Tearing the stack down](#10-tearing-the-stack-down)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -440,10 +441,32 @@ Grant `s3:GetObject` only — never `PutObject` or `DeleteObject` to `Principal:
 `s3:ListBucket` is deliberately omitted so the bucket cannot be enumerated. If you know
 your consumer account IDs, scope `Principal` to those instead of `"*"`.
 
-If your security posture forbids any public-read bucket, see the
-[air-gapped alternatives](../failover/GOVCLOUD-GUIDE.md#air-gapped--cannot-make-public-alternatives)
-in the GovCloud guide — IAM-signed pulls, pre-signed URLs, or baking artifacts into a
-custom image.
+<details>
+<summary><b>If your security posture forbids any public-read bucket</b> (click to expand)</summary>
+
+First, one trap worth stating plainly: **an S3 gateway endpoint alone does not fix the
+403.** The default bootstrap sends an *unsigned* request, which a private bucket rejects
+regardless of the endpoint. The endpoint only helps once the request is IAM-signed.
+
+Three options, all of which avoid public exposure:
+
+- **A — IAM-signed pulls (bucket stays private).** Scope the bucket policy to the BIG-IP
+  instance role, leave Block Public Access on, keep the S3 gateway endpoint, and have the
+  bootstrap fetch artifacts with signed requests. Fully in-partition and no public exposure,
+  but it requires customising how runtime-init fetches its artifacts.
+- **B — pre-signed URLs.** Pass pre-signed S3 URLs via `bigIpRuntimeInitPackageUrl`,
+  `bigIpRuntimeInitConfig01` / `02`, and the RPM `extensionUrl` values in the runtime-init
+  configs. Simple, but the URLs expire, so it suits one-off builds rather than a pattern you
+  redeploy.
+- **C — custom image.** Bake the artifacts into a custom BIG-IP image with the
+  [F5 Image Generation Tool](https://clouddocs.f5.com/cloud/public/v1/ve-image-gen_index.html).
+  Most work up front, least at deploy time, and nothing is fetched at boot at all.
+
+Public-read of a bucket containing only F5 installation artifacts is the simplest option and
+is what this guide documents. The three above are the alternatives when that is not
+acceptable.
+
+</details>
 
 **Verify every object the BIG-IP needs. All must return `200`:**
 
@@ -565,6 +588,74 @@ When it completes, read the outputs — they contain everything you need next:
 aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
 ```
+
+### 4.10 What the self-heal is doing during those 25–30 minutes
+
+Worth understanding, because it explains the long build and it is where you look first when
+a build stalls.
+
+**The problem it works around.** There is a documented BIG-IP / Declarative Onboarding
+platform bug in the 17.x line: the device-trust domain `/Common/Root` is not fully
+initialised after system startup. When it hits, DO cannot create the device trust or the
+failover device group, clustering deadlocks — one device waiting for `Root`, the other for
+the device group — and `/var/log/restnoded/restnoded.log` shows:
+
+```
+01020036:3: The requested trust domain (/Common/Root) was not found.
+01020036:3: The requested device group (/Common/failoverGroup) was not found.
+```
+
+F5's documented workaround is *reboot (which rebuilds `Root`), then re-apply clustering*.
+This is a platform timing issue — **not** caused by GovCloud, the security groups, the VPC
+endpoints, or this template — and you cannot avoid it by choosing a different 17.x image.
+
+**What ships to handle it.** The runtime-init config installs three things through its
+`pre_onboard` hook:
+
+| File | Purpose |
+|---|---|
+| `/config/cluster-heal.sh` | The orchestrator |
+| `/config/cluster-heal-trust.py` | Fetches the admin password from Secrets Manager (SigV4, via the instance role) and calls `add-to-trust`. Stdlib-only, because BIG-IP has no `aws` CLI or `boto3` |
+| `/etc/cron.d/cluster-heal` | Runs the orchestrator every 3 minutes |
+
+**The DO declaration is left stock.** DO remains the declarative source of truth; the
+self-heal only bootstraps what the platform bug prevented it from finishing, and the
+resulting cluster matches the DO declaration. On a build where the bug does not occur, the
+self-heal sees the cluster already In Sync and disables itself. It is a safety net, not a
+dependency.
+
+**What it does, per device, every 3 minutes — marker-gated so it never loops:**
+
+1. Already In Sync? → signal CloudFormation success, remove the cron, mark done, stop.
+2. Wait until onboarding has set the hostname and the box has been up long enough.
+3. `Root` missing (the bug)? → save config and **reboot once** to rebuild it.
+4. Trust not formed after the reboot? The **joiner** fetches the admin password and runs
+   `add-to-trust` against the peer; the **owner** waits for the joiner.
+5. Trust formed? → the owner creates `failoverGroup`, ensures `/LOCAL_ONLY` is excluded from
+   config-sync, force-syncs, and each device acts on any sync recommendation.
+6. In Sync → signal CloudFormation success, then disable itself.
+
+That CloudFormation signal in steps 1 and 6 is why the CloudFormation VPC endpoint matters:
+with no egress, the BIG-IP cannot reach `cloudformation.<region>.amazonaws.com`, and the
+stack would time out even though the cluster formed correctly.
+
+**Watching it.** From a jump host shell, SSH to a BIG-IP and:
+
+```bash
+tail -f /config/cluster-heal/log
+```
+
+That is the primary place to look — it narrates each phase: pre-reboot waits → reboot →
+`add-to-trust` → `creating failoverGroup` → sync → `cluster In Sync` → `cfn-signal sent OK`
+→ `disabling self-heal`. Marker files in `/config/cluster-heal/` (`rebooted`, `trust_tries`,
+`signalled`, `done`) show how far it has got. Also useful:
+`tmsh show cm sync-status`, `/var/log/cloud/bigIpRuntimeInit.log`,
+`/var/log/restnoded/restnoded.log`.
+
+> **Build times vary a lot.** A device that does not hit the bug clusters in about
+> 6 minutes; one that does needs the reboot and retry cycle and can take 40+. Both are
+> normal. **Let the full 50-minute timeout elapse before concluding a build has failed** —
+> we killed a healthy build at 40 minutes during validation and learned nothing from it.
 
 ---
 
@@ -961,13 +1052,76 @@ declared. Never change a property of those route resources in a stack update —
 CloudFormation would re-point them at instance A regardless of which device is active. To
 change the prefix, redeploy.
 
-**Deleting the stack.** Empty the CFE S3 bucket first, then delete the stack. The VIP
-routes are stack resources and are removed with it even though CFE has changed their
-target.
+---
+
+## 10. Tearing the stack down
+
+Cloud Failover Extension creates an S3 bucket for its failover state, and **CloudFormation
+cannot delete a bucket that still has objects in it**. Empty it first or the stack delete
+fails partway and leaves resources behind:
+
+```bash
+STACK=<your-stack-name>
+
+CFEB=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='cfeS3Bucket'].OutputValue" --output text)
+echo "CFE state bucket: $CFEB"
+
+aws s3 rm "s3://$CFEB" --recursive
+aws cloudformation delete-stack --stack-name "$STACK"
+aws cloudformation wait stack-delete-complete --stack-name "$STACK" && echo deleted
+```
+
+> ⚠️ `$CFEB` is CFE's **state** bucket, created by the stack. It is not your staging bucket
+> of templates and artifacts — do not delete that one.
+
+**Never run this against a stack that is still building.** Deleting the CFE state bucket of
+a live stack removes the file the extension is actively using. If you need to abandon a
+build in progress, delete the stack and let CloudFormation remove the bucket with it.
+
+**Then confirm nothing billable survived.** A delete that fails partway can strand NAT
+gateways and Elastic IPs, both of which bill by the hour:
+
+```bash
+aws ec2 describe-nat-gateways --filter "Name=state,Values=available,pending" \
+  --query 'NatGateways[].[NatGatewayId,VpcId,State]' --output table
+aws ec2 describe-addresses --query 'Addresses[].[PublicIp,AllocationId,AssociationId]' --output table
+aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`]|[0].Value]' --output table
+```
+
+All three should be empty for this stack. A current air-gap deployment creates no NAT
+gateways or Elastic IPs at all, so any that appear are either from another stack or from an
+older deployment built before that change.
+
+**If the delete fails**, find the blocking resource rather than retrying blindly:
+
+```bash
+aws cloudformation describe-stack-events --stack-name "$STACK" \
+  --query 'StackEvents[?ResourceStatus==`DELETE_FAILED`].[LogicalResourceId,ResourceType,ResourceStatusReason]' \
+  --output table
+```
+
+The usual causes are the CFE bucket having been repopulated (empty it again — the instances
+are gone by then, so nothing will rewrite it) or an interface still detaching, which
+generally clears on a retry a few minutes later. As a last resort you can abandon a specific
+resource, but anything retained stays in your account and must be deleted by hand:
+
+```bash
+aws cloudformation delete-stack --stack-name "$STACK" --retain-resources <LogicalResourceId>
+```
+
+**What survives deliberately.** The admin secret and the SSH key pair are not stack
+resources when you supply them yourself, so they persist for the next deployment. If you
+let the stack generate the secret, it is deleted with the stack but held under Secrets
+Manager's recovery window (30 days by default), so repeated deploy/destroy cycles
+accumulate `*-bigIpSecret-*` entries with identical name prefixes. Creating one secret
+yourself and passing `bigIpSecretArn` avoids both the clutter and a new random password on
+every build.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### `SessionManagerPlugin is not found`
 
@@ -1169,10 +1323,97 @@ runtime-init configuration if the log noise is unwelcome.
 
 ### Clustering never completes
 
-Covered in the GovCloud guide's
-[self-heal section](../failover/GOVCLOUD-GUIDE.md#12-automatic-clustering-recovery-the-self-heal).
-The short version: `/config/cluster-heal/log` on each device narrates what the self-heal is
-doing, and `tmsh show cm sync-status` is the state to watch for.
+**First, give it time.** [Section 4.10](#410-what-the-self-heal-is-doing-during-those-2530-minutes)
+explains what is happening; builds that hit the device-trust bug need a reboot and retry
+cycle and can take 40+ minutes. Let the full 50-minute timeout elapse.
+
+**Then read the narration** — `/config/cluster-heal/log` on **both** devices. The last line
+names the phase it is in. Common outcomes:
+
+| What the log says | What it means |
+|---|---|
+| `cfn-signal failed` | The BIG-IP cannot reach CloudFormation. Check the interface endpoint exists and `curl -sk --max-time 10 https://cloudformation.<region>.amazonaws.com/` returns a number, not `000`. |
+| `add-to-trust … No route to host` | Harmless, right after the reboot — the metadata service is not up yet. The next 3-minute tick retries automatically. |
+| `Root STILL missing >4min after reboot` | The self-heal exhausted its attempts. Use the manual recovery below. |
+| `add-to-trust attempted 6x` | Same — manual recovery below. |
+
+**Re-arm the self-heal** after manual changes:
+
+```bash
+rm -f /config/cluster-heal/done /config/cluster-heal/signalled
+echo '*/3 * * * * root /config/cluster-heal.sh >/dev/null 2>&1' > /etc/cron.d/cluster-heal
+```
+
+or just run `/config/cluster-heal.sh` by hand.
+
+<details>
+<summary><b>Manual clustering recovery</b> — the fallback when the self-heal gives up (click to expand)</summary>
+
+Symptom: `tmsh show cm sync-status` reports `Status: Unknown`, `Summary: no trust domain`,
+`Mode: standalone`, and `tmsh list cm trust-domain` is empty.
+
+Device trust and config-sync run over the **external Self IP** network — the management
+interface is not used for clustering. Substitute your own admin password and Self IPs.
+
+**1. Reboot BOTH devices.** A clean boot lets `devmgmtd` rebuild the `Root` trust domain.
+Runtime-init is one-shot and will not re-run its failed clustering:
+
+```bash
+tmsh reboot
+```
+
+**2. Once both are back, confirm `Root` exists on each:**
+
+```bash
+tmsh list cm trust-domain one-line
+```
+
+**3. On failover02**, add failover01 over its **external** Self IP (not management):
+
+```bash
+tmsh modify cm trust-domain Root ca-devices add { 10.0.0.11 } \
+  name failover01.local username admin password '<admin-password>'
+```
+
+`tmsh list cm trust-domain one-line` should now show both devices as `initialized`.
+
+**4. On failover01**, create the device group and sync:
+
+```bash
+tmsh create cm device-group failoverGroup type sync-failover
+tmsh modify cm device-group failoverGroup devices add { failover01.local failover02.local }
+tmsh modify cm device-group failoverGroup auto-sync enabled network-failover enabled
+tmsh modify sys folder /LOCAL_ONLY device-group none traffic-group traffic-group-local-only
+tmsh save sys config
+tmsh run cm config-sync to-group failoverGroup
+```
+
+The `/LOCAL_ONLY` line is not optional — without it the per-AZ default route syncs to the
+peer and the cluster lands in `Sync Failed`
+([see above](#sync-failed--static-route-gateway--is-not-directly-connected-via-an-interface)).
+
+If it stays `Changes Pending` or `Awaiting Initial Sync`, force the initial push from the
+device holding the authoritative config:
+
+```bash
+tmsh run cm config-sync force-full-load-push to-group failoverGroup
+```
+
+**5. Verify on both devices** — expect `Status: In Sync` (green), `Mode: high-availability`:
+
+```bash
+tmsh show cm sync-status
+```
+
+</details>
+
+### The two devices ended up with different admin passwords
+
+If trust never forms and `curl -sku admin:'<pw>' https://<peer-mgmt>/mgmt/tm/sys/version`
+returns `200` on one device and `401` on the other, the secret was changed between the two
+instances launching, so they resolved different values. Use a stable secret — create it
+yourself and pass `bigIpSecretArn` rather than letting the stack generate one — and
+redeploy.
 
 ### A command with multiple IDs fails with `Invalid...ID.NotFound`
 
@@ -1186,6 +1427,7 @@ IDs out literally, or use a zsh array: `RTBS=(rtb-aaa rtb-bbb)`.
 
 - [README.md](README.md) — parameter and output reference for this template
 - [MAINTAINING.md](MAINTAINING.md) — how this directory relates to `examples/failover`
-- [`examples/failover/GOVCLOUD-GUIDE.md`](../failover/GOVCLOUD-GUIDE.md) — the shared
-  GovCloud groundwork, self-heal detail and full parameter reference
+- [`examples/failover/GOVCLOUD-GUIDE.md`](../failover/GOVCLOUD-GUIDE.md) — the *other*
+  solution in this repository: the EIP-based failover pair. Not required for anything in
+  this guide
 - [F5 Cloud Failover Extension documentation](https://clouddocs.f5.com/products/extensions/f5-cloud-failover/latest/userguide/aws.html)

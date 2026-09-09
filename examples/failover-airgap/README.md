@@ -66,13 +66,15 @@ fail over. Route-based failover sidesteps addressing entirely.
 
 ## Prerequisites
 
-Identical to the GovCloud prerequisites in
-[`examples/failover/GOVCLOUD-GUIDE.md`](../failover/GOVCLOUD-GUIDE.md) sections 1-8: an S3
-bucket in the deployment Region holding the modules, this directory, the BIG-IP extension
-RPMs and the runtime-init installer, all readable by the BIG-IPs; an SSH key pair; an
-admin-password secret; a BIG-IP marketplace image available in the Region.
+An S3 bucket in the deployment Region holding the modules, this directory, the BIG-IP
+extension RPMs and the runtime-init installer, all readable by the BIG-IPs; an SSH key pair;
+an admin-password secret; and a BIG-IP marketplace image available in the Region.
 
-In addition:
+**[AIRGAP-GUIDE.md sections 3 and 4](AIRGAP-GUIDE.md#3-before-you-start) walk through every
+one of those with commands** - it is self-contained, so you do not need any other document
+to get a working stack.
+
+Points specific to this solution:
 
 - **Choose the VIP prefix carefully.** `externalVipCidr` (default `10.99.0.0/24`) must not
   overlap the VPC CIDR or anything reachable from the VPC - including on-premises ranges
@@ -177,8 +179,21 @@ tmsh run sys failover standby
 
 ## Deleting this Solution
 
-As for `examples/failover`: empty the CFE S3 bucket, then delete the stack. The VIP routes
-are stack resources and are removed with it even though CFE has changed their target.
+Empty the CFE state bucket first - CloudFormation cannot delete a bucket that still has
+objects in it, and the delete fails partway if you skip this. The VIP routes are stack
+resources and are removed with the stack even though CFE has changed their target.
+
+```bash
+CFEB=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='cfeS3Bucket'].OutputValue" --output text)
+aws s3 rm "s3://$CFEB" --recursive
+aws cloudformation delete-stack --stack-name "$STACK"
+aws cloudformation wait stack-delete-complete --stack-name "$STACK"
+```
+
+Full procedure, including what to check for stranded resources and what to do when the
+delete fails, is in
+[AIRGAP-GUIDE.md section 10](AIRGAP-GUIDE.md#10-tearing-the-stack-down).
 
 ## Maintaining
 
