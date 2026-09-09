@@ -1117,17 +1117,35 @@ Observed in lab on 2026-09-08: the *owner* device had `device-group failoverGrou
 its peer correctly had `none`, which fits the group being created on the owner. The
 self-heal now detects and corrects this on both devices.
 
-> ### ⚠️ Root cause not fully confirmed
-> Correcting the folder on the affected device did **not** clear an already-failed sync in
-> lab — the status stayed red with both devices correctly configured, both `/Common` route
-> tables empty, and each device holding only its own gateway. Either the failure state is
-> sticky once set, or something else is also involved. What is established: the folder
-> assignment was genuinely wrong on one device, `device-group none` is the correct state,
-> and the self-heal now enforces it. What is **not** established is that this alone prevents
-> or clears the sync failure. Verify on a fresh deployment — check `tmsh show cm sync-status`
-> after `CREATE_COMPLETE` and confirm it reaches and stays In Sync — and if it recurs,
-> collect `grep -i 01070330 /var/log/ltm` from both devices with timestamps before changing
-> anything.
+> ### ⚠️ Fixing the folder is not enough on its own — the status stays red
+> BIG-IP caches the last sync failure and only clears it after a **successful** load. So
+> after correcting the folder, the cluster still reports `Sync Failed` and it looks like the
+> fix did nothing. You must then force one clean load, **from the device that was the source
+> of the failed sync** — pushing from the peer does not clear it:
+>
+> ```bash
+> tmsh run cm config-sync force-full-load-push to-group failoverGroup
+> sleep 30
+> tmsh show cm sync-status
+> ```
+>
+> That push is safe once `/LOCAL_ONLY` is excluded on both devices, because the route can no
+> longer be carried. Confirmed in lab 2026-09-09: folder corrected on both devices, then one
+> push from the source device, and the cluster went green and stayed there.
+
+**Confirming it is stale rather than live.** If you are unsure whether a red status reflects
+an ongoing failure or a cached one, two checks settle it:
+
+```bash
+grep -rnE '10\.0\.0\.1([^0-9]|$)' /config/bigip.conf /config/bigip_base.conf /config/partitions/*/bigip.conf
+grep -i '01070330' /var/log/ltm
+```
+
+Substitute the gateway from your own error. The sync payload is built from those config
+files, so if the address appears **only** in `/config/partitions/LOCAL_ONLY/bigip.conf`,
+nothing syncable references it and the payload cannot carry it. If `/var/log/ltm` has no
+matching entries — check whether they are only in the rotated `ltm.1` — then nothing has
+failed recently and the status is simply stale.
 
 **Note that failover keeps working while this is broken**, because network failover and
 CFE's route updates do not depend on config-sync. What stops is configuration propagation

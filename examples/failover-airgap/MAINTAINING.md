@@ -13,7 +13,7 @@ duplication, and this file is what keeps the two from drifting.
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
 | **Result** | Deployed end to end; VIP failover verified in **both** directions |
 | **Convergence** | 6-10 s each way (in-VPC client, 0.5 s poll, last-good to first-good; runs: 9.58 s / ~6 s / 9.58 s) |
-| **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. |
+| **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. (3) NAT gateways and two Elastic IPs were created in what was documented as a no-public-IP design, giving the private subnets internet egress - now `provisionNatGateways='false'`, with NTP moved to link-local. (4) `/LOCAL_ONLY` was assigned to the sync device group on the owner device, syncing a per-AZ default route to a peer that rejected it and leaving the cluster permanently `Sync Failed`. |
 
 Re-run the [validation checklist](AIRGAP-GUIDE.md#6-validating-the-deployment) and both
 failover directions after any change to the CFE declaration, the network module's route
@@ -132,11 +132,12 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   folder stamped with it; the script now corrects this on every device. Lab-observed
   2026-09-08 on the owner device only, its peer being correct - consistent with the group
   being created on the owner. The correct state is `device-group none` and
-  `traffic-group traffic-group-local-only`. **Caveat:** correcting the folder did not clear
-  an already-failed sync in that lab session, so this is a confirmed misconfiguration but an
-  unconfirmed root cause for the `Sync Failed` state itself. Confirm on a fresh deployment
-  that the cluster reaches and holds In Sync; treat the sync failure as an open item until
-  then.
+  `traffic-group traffic-group-local-only`. **Root cause confirmed 2026-09-09:** with the
+  folder corrected on both devices, the only remaining occurrence of the offending gateway
+  was `/config/partitions/LOCAL_ONLY/bigip.conf`, which is not syncable - and one
+  `force-full-load-push` from the source device cleared the status to In Sync. Note that
+  BIG-IP caches the last failure, so the status stays red until a successful load; fixing
+  the folder alone looks like it changed nothing.
 
 - **Nothing in the private subnets may need internet egress.** `provisionNatGateways='false'`
   removes the default route entirely. Everything the solution needs is reachable without it:
