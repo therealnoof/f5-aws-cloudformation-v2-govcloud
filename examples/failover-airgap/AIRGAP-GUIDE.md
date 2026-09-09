@@ -1113,8 +1113,21 @@ tmsh show cm sync-status
 **Why it happens:** the clustering self-heal creates the device group out of band, because
 Declarative Onboarding's own clustering deadlocks on the documented device-trust startup
 bug. That out-of-band creation can leave `/LOCAL_ONLY` stamped with the new device group.
-The self-heal now detects and corrects this automatically (2026-09-08), so a current
-deployment should not hit it — the manual fix above is for stacks built before that change.
+Observed in lab on 2026-09-08: the *owner* device had `device-group failoverGroup` while
+its peer correctly had `none`, which fits the group being created on the owner. The
+self-heal now detects and corrects this on both devices.
+
+> ### ⚠️ Root cause not fully confirmed
+> Correcting the folder on the affected device did **not** clear an already-failed sync in
+> lab — the status stayed red with both devices correctly configured, both `/Common` route
+> tables empty, and each device holding only its own gateway. Either the failure state is
+> sticky once set, or something else is also involved. What is established: the folder
+> assignment was genuinely wrong on one device, `device-group none` is the correct state,
+> and the self-heal now enforces it. What is **not** established is that this alone prevents
+> or clears the sync failure. Verify on a fresh deployment — check `tmsh show cm sync-status`
+> after `CREATE_COMPLETE` and confirm it reaches and stays In Sync — and if it recurs,
+> collect `grep -i 01070330 /var/log/ltm` from both devices with timestamps before changing
+> anything.
 
 **Note that failover keeps working while this is broken**, because network failover and
 CFE's route updates do not depend on config-sync. What stops is configuration propagation

@@ -130,8 +130,13 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   permanently `Sync Failed` while failover itself keeps working - so it is easy to miss.
   Creating the device group out of band, which `cluster-heal.sh` must do, can leave the
   folder stamped with it; the script now corrects this on every device. Lab-observed
-  2026-09-08. The correct state is `device-group none` and
-  `traffic-group traffic-group-local-only`.
+  2026-09-08 on the owner device only, its peer being correct - consistent with the group
+  being created on the owner. The correct state is `device-group none` and
+  `traffic-group traffic-group-local-only`. **Caveat:** correcting the folder did not clear
+  an already-failed sync in that lab session, so this is a confirmed misconfiguration but an
+  unconfirmed root cause for the `Sync Failed` state itself. Confirm on a fresh deployment
+  that the cluster reaches and holds In Sync; treat the sync failure as an open item until
+  then.
 
 - **Nothing in the private subnets may need internet egress.** `provisionNatGateways='false'`
   removes the default route entirely. Everything the solution needs is reachable without it:
