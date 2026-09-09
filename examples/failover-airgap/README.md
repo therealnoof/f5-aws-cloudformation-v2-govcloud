@@ -111,7 +111,13 @@ The parameters are those of `failover.yaml` **minus** the public-IP toggles
 | `provisionSsmAccess` | No | `true` | Deploy a private jump host managed by Systems Manager Session Manager (`modules/ssm-jump`) in the BIG-IP management subnet, plus the SSM interface endpoints. No public IP, no inbound rules, no SSH key. |
 | `ssmJumpInstanceType` | No | `t3.micro` | Instance type for the jump host. It only terminates SSM sessions and forwards ports, so the smallest type in the Region is normally enough. |
 | `ssmJumpCustomImageId` | No | `''` | AMI for the jump host, overriding the Amazon Linux 2023 lookup. Leave empty for the normal case. Set it if the AWS-published SSM parameter `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64` is not available in your Region, or if a hardened base image is required. Any image works provided the SSM Agent is installed and starts at boot. |
+| `bigIpRuntimeInitGpgKeyUrl` | No | `''` | **Leave blank.** Blank auto-derives `<s3BucketName>.s3.<s3BucketRegion>.amazonaws.com/<artifactLocation>gpg.key`. Set it only to serve the key from elsewhere. This is the GPG public key the runtime-init installer verifies its own RPM against - a separate download from the installer package that F5 hard-codes to a **commercial-partition** bucket, unreachable from an air-gapped GovCloud VPC and fatal when it fails. Either way `gpg.key` must be staged in the bucket and anonymously readable; `s3 sync` does not copy it. |
 | `provisionBastion` | No | `false` | Fallback only: deploy the Linux bastion (`modules/bastion`) in the first external subnet **with a public IP** and SSH open to `restrictedSrcAddressMgmt`. |
+
+> There is no parent parameter for the installer flags themselves. The parent assembles
+> `--skip-toolchain-metadata-sync --key <the URL above>` and passes it to each BIG-IP as the
+> `bigIpRuntimeInitInstallerFlags` parameter of `modules/bigip-standalone`. That module
+> parameter defaults to `''`, so `examples/failover` and the other examples are unaffected.
 
 See `failover-airgap-parameters.json` for a complete example parameter set.
 

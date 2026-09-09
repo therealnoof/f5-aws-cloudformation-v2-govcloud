@@ -114,7 +114,7 @@ Metadata:
       bigIpRuntimeInitPackageUrl:
         default: Runtime Init Package
       bigIpRuntimeInitGpgKeyUrl:
-        default: Runtime Init GPG Public Key
+        default: Runtime Init GPG Key URL (optional - blank auto-derives)
       cfeS3Bucket:
         default: CFE S3 bucket
       cfeTag:
@@ -363,15 +363,18 @@ Parameters:
     Type: String
   bigIpRuntimeInitGpgKeyUrl:
     Default: ''
-    Description: 'URL for the GPG public key that the BIG-IP Runtime Init installer uses to
-      verify the signature on its own RPM. This is a SEPARATE download from the installer
-      package itself, and F5 hard-codes it to https://f5-cft.s3.amazonaws.com/ - a bucket in
-      the COMMERCIAL AWS partition. A GovCloud VPC with no internet egress cannot reach it,
-      the fetch is fatal, and the BIG-IP never onboards (no admin password, no clustering,
-      stack times out). This template therefore always points the installer at a staged copy.
-      Leave blank to auto-derive gpg.key from s3BucketName / s3BucketRegion / artifactLocation,
-      which requires that you stage gpg.key into your bucket alongside the .gz.run installer.
-      See AIRGAP-GUIDE.md for the one-line command that copies it there.'
+    Description: 'OPTIONAL - leave blank. Blank auto-derives the key URL from s3BucketName /
+      s3BucketRegion / artifactLocation as <bucket>.s3.<region>.amazonaws.com/<prefix>/gpg.key,
+      which is correct if you staged gpg.key into your bucket as the guide instructs. Set this
+      only to serve the key from a different location. WHAT IT IS: the GPG public key that the
+      BIG-IP Runtime Init installer uses to verify the signature on its own RPM. It is a
+      SEPARATE download from the installer package, and F5 hard-codes it to
+      f5-cft.s3.amazonaws.com - a bucket in the COMMERCIAL AWS partition. An air-gapped
+      GovCloud VPC cannot reach that, the fetch is fatal, and the BIG-IP never onboards: no
+      admin password, no clustering, and the stack times out after roughly 50 minutes. This
+      template therefore always points the installer at a staged copy. Either way, gpg.key must
+      be staged and anonymously readable - it is NOT copied by s3 sync. See AIRGAP-GUIDE.md
+      section 4.4.'
     Type: String
   cfeS3Bucket:
     AllowedPattern: '^$|^(?=.{1,61}$)[0-9a-z]+([0-9a-z-.]*[0-9a-z])*$'
