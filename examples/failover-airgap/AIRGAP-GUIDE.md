@@ -1462,10 +1462,118 @@ return to `In Sync` without intervention.
 
 ## 9. What to plan for
 
+### Adding production VIPs after the demo
+
+The single most common question once a customer is past the example application: **where do our
+real VIPs go, and do they have to be AS3?**
+
+**The unit of failover is the prefix, not the VIP.** The stack creates one route per route table
+for the whole of `externalVipCidr` — `10.99.0.0/24` by default — pointed at the active device's
+external interface, and CFE's `scopingAddressRanges` is that same prefix. CFE moves the *route*.
+It never looks at your virtual server list and has no per-VIP configuration.
+
+**So every address inside `externalVipCidr` already fails over.** `10.99.0.100` is simply the one
+the example uses. `10.99.0.101` through `10.99.0.254` are already routed and already in scope.
+Adding a production VIP requires:
+
+- **no AWS change** — no new route, no route table edit, no ENI work
+- **no CFE change** — no declaration update, no restart
+- **nothing outside the BIG-IP at all**
+
+That is roughly 254 VIPs from the deployment you already have, and it is the main practical
+advantage of route-based failover over `failoverAddresses`: with secondary-IP failover you would
+be assigning and moving an ENI address for every single VIP.
+
+#### AS3 or by hand — both work, and they can coexist
+
+CFE is agnostic about how the virtual server was created. Choose whichever suits the customer's
+operating model:
+
+| Method | Supported | Notes |
+|---|---|---|
+| **AS3** | ✅ | Consistent with this template, declarative, redeployable |
+| **`tmsh` / TMUI by hand** | ✅ | Perfectly valid — many teams prefer it |
+| **Both in the same pair** | ✅ | Subject to the one rule below |
+
+> ⚠️ **The one rule: never hand-edit AS3-owned objects.** AS3 owns everything under `Tenant_1`.
+> Editing those through the GUI appears to work and is then silently reverted by the next AS3
+> deployment. Put manual configuration in `/Common` or its own partition and the two never
+> collide.
+
+Config-sync covers either: both are ordinary configuration inside `failoverGroup`, so they
+replicate to the standby without anything extra.
+
+#### Worked example — a second VIP on 10.99.0.101
+
+**By hand.** ⚙️ BIG-IP, on the **Active** device only; config-sync carries it to the peer:
+
+```bash
+tmsh create ltm pool prod_pool_1 members add { 10.0.2.50:8080 10.0.6.50:8080 } monitor http
+tmsh create ltm virtual prod_vs_1 destination 10.99.0.101:443 pool prod_pool_1 \
+  ip-protocol tcp profiles add { http clientssl tcp } source-address-translation { type automap }
+tmsh save sys config
+tmsh run cm config-sync to-group failoverGroup
+```
+
+**With AS3**, add another application to the existing declaration rather than posting a second
+one — AS3 replaces the whole tenant per declaration, so a separate POST to the same tenant would
+remove what is already there:
+
+```json
+"HTTPS_Service_02": {
+  "class": "Application",
+  "template": "https",
+  "serviceMain": {
+    "class": "Service_HTTPS",
+    "virtualAddresses": ["10.99.0.101"],
+    "snat": "auto",
+    "pool": "prod_pool_1",
+    "serverTLS": { "bigip": "/Common/clientssl" }
+  },
+  "prod_pool_1": {
+    "class": "Pool",
+    "members": [{ "servicePort": 8080, "serverAddresses": ["10.0.2.50", "10.0.6.50"] }],
+    "monitors": ["http"]
+  }
+}
+```
+
+#### Verify the new VIP actually fails over
+
+It should, because it inherits the existing route — but confirm rather than assume:
+
+```bash
+# 🔒 JUMP HOST — before and after a failover
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.99.0.101/
+```
+
+```bash
+# ⚙️ BIG-IP — the Active device: one route covers every VIP in the range
+tmsh show cm failover-status | head -3
+```
+
+If `10.99.0.100` moves and `10.99.0.101` does not, the address is **outside** `externalVipCidr` —
+check it against the prefix. That is the only way a VIP in this design can fail to follow the
+pair.
+
+#### Size `externalVipCidr` at deploy time
+
+This is the decision that cannot be deferred. A `/24` gives 254 usable addresses; a `/22` gives
+about a thousand. **Changing it later is a redeploy, not a stack update** — see "The VIP routes
+drift from the template by design" below: updating those route resources would re-point them at
+instance 01 regardless of which device is active.
+
+Pick a prefix that will not overlap the VPC, any peered VPC, or anything reachable on-premises,
+and make it comfortably larger than the customer's current VIP count.
+
+---
+
 **Reachability beyond the VPC.** The template routes the VIP prefix *inside* this VPC only.
 Clients arriving over Direct Connect, VPN or a Transit Gateway need `externalVipCidr`
 propagated into *their* route tables. Straightforward, but it is a conversation with the
-customer's network team and belongs in the design, not in testing.
+customer's network team and belongs in the design, not in testing. Note this is done **once for
+the whole prefix**, not per VIP — every future VIP inside the range is reachable as soon as the
+range is.
 
 **Monitoring must check the route, not just CFE.** CFE writes
 `taskState: SUCCEEDED` / `Failover Complete` even when it performs **zero** route
