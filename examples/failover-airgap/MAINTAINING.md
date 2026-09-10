@@ -9,11 +9,22 @@ duplication, and this file is what keeps the two from drifting.
 
 | | |
 |---|---|
-| **Validated** | 2026-09-08, `us-gov-east-1` |
+| **Validated** | 2026-09-08 and again 2026-09-10 (first clean build with every fix active at once), `us-gov-east-1` |
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
 | **Result** | Deployed end to end; VIP failover verified in **both** directions |
 | **Convergence** | 6-10 s each way (in-VPC client, 0.5 s poll, last-good to first-good; runs: 9.58 s / ~6 s / 9.58 s) |
 | **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. (3) NAT gateways and two Elastic IPs were created in what was documented as a no-public-IP design, giving the private subnets internet egress - now `provisionNatGateways='false'`, with NTP moved to link-local. (4) `/LOCAL_ONLY` was assigned to the sync device group on the owner device, syncing a per-AZ default route to a peer that rejected it and leaving the cluster permanently `Sync Failed`. |
+
+**2026-09-10 build** confirmed, in one deployment, every fix working together: runtime-init
+installed from the staged `gpg.key`, DO applied with link-local NTP and DNS, device trust and
+`failoverGroup` formed, config-sync `In Sync`, `/LOCAL_ONLY` excluded from the sync group, CFE
+carrying bare next-hop addresses, the CFE state bucket named and reachable on both devices, and
+the VIP following the active device in both directions. Two further defects were found and
+fixed reaching it - see "Vendor installers" below for both.
+
+Note that on a clean build `/LOCAL_ONLY` reports `device-group none` with `traffic-group none`;
+only `device-group` matters. The self-heal sets `traffic-group-local-only` when it has to
+correct the folder, so either value is healthy.
 
 Re-run the [validation checklist](AIRGAP-GUIDE.md#6-validating-the-deployment) and both
 failover directions after any change to the CFE declaration, the network module's route

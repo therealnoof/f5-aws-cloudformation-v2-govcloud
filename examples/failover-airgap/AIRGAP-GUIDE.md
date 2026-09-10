@@ -922,6 +922,55 @@ curl -sku admin:"$PW" https://localhost:8443/mgmt/shared/cloud-failover/inspect 
 
 </details>
 
+**Where the application objects are — the GUI looks empty and is not.**
+
+After a successful deployment the virtual servers, pool, iRule and WAF policy appear
+**nowhere** under Common, and switching through every partition still shows nothing. The
+objects are there; TMUI is just not showing them, for two reasons that stack:
+
+- **The partition list is read at login.** AS3 creates the `Tenant_1` partition *during*
+  onboarding. A browser session opened before that will not list it at all. **Log out and
+  back in first** — this alone fixes most cases.
+- **AS3 nests everything in folders, and TMUI lists only the folder you have selected.**
+  Nothing sits directly in `Tenant_1`, so selecting that partition shows an empty screen. The
+  objects live one level down:
+
+| Folder | What is in it |
+|---|---|
+| `Tenant_1/HTTP_Service_01` | The HTTP virtual server (`serviceMain`) |
+| `Tenant_1/HTTPS_Service_01` | The HTTPS virtual server (`serviceMain`) |
+| `Tenant_1/Shared` | The pool, the demo iRule, the WAF policy, and the service address `10.99.0.100` |
+
+In the partition selector at the top right, pick the **folder** (`Tenant_1/HTTP_Service_01`),
+not just the partition. If your build offers an **`[All]`** option in that selector, that shows
+everything at once and is the quickest way to look around.
+
+Confirm from the CLI any time the GUI is confusing you — this is the ground truth:
+
+```bash
+# ⚙️ BIG-IP
+tmsh -c 'cd /; list ltm virtual recursive one-line' | cut -c1-120
+tmsh list auth partition
+tmsh -c 'cd /; list sys folder recursive one-line' | cut -c1-100
+```
+
+You want `Tenant_1/HTTP_Service_01/serviceMain` and `Tenant_1/HTTPS_Service_01/serviceMain`.
+If those exist, the deployment is fine and you are looking at a navigation problem. If the
+listing is genuinely empty, check whether AS3 deployed at all:
+
+```bash
+curl -su admin:<password> http://localhost:8100/mgmt/shared/appsvcs/declare | python3 -m json.tool | head -40
+```
+
+> ⚠️ **Treat AS3 objects as read-only in the GUI.** AS3 owns everything under `Tenant_1`.
+> Editing it by hand puts the running configuration out of step with the declaration, and the
+> next AS3 deployment silently reverts your change. Use the GUI to inspect and demonstrate;
+> make changes in the runtime-init configuration and redeploy.
+
+> **On a demo:** the virtual server shows **Available (Offline)** with an empty pool, which is
+> the case when `provisionExampleApp` is `false`. The demo iRule answers instead, so `curl`
+> returns `200` while the GUI shows a red diamond. Explain that before someone points at it.
+
 ### 5.2 A shell on the jump host
 
 This is your in-VPC test client — the easiest place to `curl` the VIP from.
