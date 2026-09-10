@@ -19,8 +19,9 @@ if you are deploying that instead, or want more background on GovCloud generally
 > the same bundle and throughput as the validated build, one patch newer. It was moved off
 > 17.5.1.6 because a defect in that release scopes the admin user to the `Common` partition:
 > `tmsh` lists the AS3-created application objects normally, but the GUI shows nothing under
-> `Tenant_1`. **Whether 17.5.1.9 carries the fix is unconfirmed** — see the troubleshooting
-> entry for the one-line check and the workaround that applies to any version.
+> `Tenant_1`. **17.5.1.9 was confirmed to carry the fix** — it reports `all-partitions` on both
+> devices. See the troubleshooting entry for the check and for the workaround that applies to
+> any version.
 
 ---
 
@@ -1758,11 +1759,15 @@ admin:
 > than being ignored — a whole build cycle to discover. The `tmsh modify` above has no such risk
 > and can be applied to a running pair at any time.
 
-**Which releases are affected** is not fully established. It was observed on **17.5.1.6**, and
-the same symptom has been reported on unrelated CIS + AS3 deployments, which points at the
-behaviour rather than at one build. The default image is now 17.5.1.9-0.0.12; **whether that
-release carries the fix is unconfirmed**, so run the `tmsh list auth user admin` check on your
-first build either way.
+**Which releases are affected.** Confirmed present on **17.5.1.6-0.0.25** and **fixed in
+17.5.1.9-0.0.12**, both measured in `us-gov-east-1` on a 3-NIC PAYG Best Plus build: 17.5.1.6
+reported `partition-access { Common { role admin } }`, 17.5.1.9 reported
+`all-partitions` on both devices with no intervention. That is why the default image is
+17.5.1.9-0.0.12.
+
+The same symptom has been reported on unrelated CIS + AS3 deployments, so treat the check as
+worth running on any release rather than assuming only 17.5.1.6 is affected — it costs one
+command.
 
 ### `SessionManagerPlugin is not found`
 

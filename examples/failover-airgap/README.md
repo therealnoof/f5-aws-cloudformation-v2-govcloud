@@ -41,8 +41,8 @@ make is served by a VPC endpoint.
 > the same bundle and throughput as the validated build, one patch newer. It was moved off
 > 17.5.1.6 because a defect in that release scopes the admin user to the `Common` partition:
 > `tmsh` lists the AS3-created application objects normally, but the GUI shows nothing under
-> `Tenant_1`. **Whether 17.5.1.9 carries the fix is unconfirmed** — see the troubleshooting
-> entry for the one-line check and the workaround that applies to any version.
+> `Tenant_1`. **17.5.1.9 was confirmed to carry the fix.** See the guide's troubleshooting
+> section for the check and the workaround that applies to any version.
 
 ## What is different from `examples/failover`
 

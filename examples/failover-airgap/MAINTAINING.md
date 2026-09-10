@@ -45,12 +45,12 @@ timing all stay in known territory.
 
 **Two things are still open on this pin:**
 
-- **Whether 17.5.1.9 carries the partition-access fix is unconfirmed.** If the GUI symptom
-  persists, the version-independent fix is `partitionAccess` on the DO User class - see the
-  troubleshooting entry in the guide. That is arguably the correct declaration regardless, since
-  an admin scoped to `Common` cannot see tenant partitions on any release. It is not applied by
-  default only because an unsupported property would fail DO validation and cost a build cycle;
-  verify it against the DO schema version in use before adding it.
+- **17.5.1.9 carries the partition-access fix - confirmed 2026-09-10.** Both devices reported
+  `partition-access { all-partitions { role admin } }` with no intervention, against
+  `Common` on 17.5.1.6. The version-independent fix, should it ever recur, is `partitionAccess`
+  on the DO User class - see the troubleshooting entry in the guide. It is deliberately not
+  applied by default: DO rejects an unrecognised property outright, so an unsupported spelling
+  fails onboarding rather than being ignored, and that costs a build cycle to discover.
 - **17.5.1.9 has not been through the validation checklist.** Everything recorded above was
   measured on 17.5.1.6.
 
