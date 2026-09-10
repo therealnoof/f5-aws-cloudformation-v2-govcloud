@@ -1905,6 +1905,14 @@ crit tmm[3597]: 01260030:2: Profile _ha_cgc_clientssl - cannot load key/cert/cha
 TMM could not load the device-trust certificate chain, so iQuery opens a TCP connection and then
 has no usable TLS — which is why the port test passes while no session ever forms.
 
+> ⚠️ **This error on its own does NOT mean the cluster is broken.** Measured 2026-09-10: a build
+> that reached `In Sync` unaided, and stayed healthy, had **8** of these errors on one device. The
+> profiles evidently get reloaded successfully later in some runs. So do not go looking for it and
+> then conclude you have found your fault — it is only meaningful **together with** config-sync
+> staying `Disconnected`. That is exactly why the self-heal triggers its TMM restart on sustained
+> `Disconnected` rather than on this log signature: gating on the error would have restarted TMM
+> on a perfectly healthy pair.
+
 **It is a race, and the timestamps show it.** Compare the TMM error against the trust
 installation in the same log:
 

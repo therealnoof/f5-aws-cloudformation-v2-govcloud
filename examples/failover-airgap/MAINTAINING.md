@@ -9,7 +9,7 @@ duplication, and this file is what keeps the two from drifting.
 
 | | |
 |---|---|
-| **Validated** | 2026-09-08 and again 2026-09-10 (first clean build with every fix active at once), `us-gov-east-1` |
+| **Validated** | 2026-09-08 (17.5.1.6), and 2026-09-10 on **17.5.1.9-0.0.12** with every fix active, `us-gov-east-1` |
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
 | **Default image now** | BIG-IP 17.5.1.9-0.0.12, Best Plus 25Mbps - one patch newer than validated, see note below |
 | **Result** | Deployed end to end; VIP failover verified in **both** directions |
@@ -241,6 +241,24 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   chmod +x /tmp/fakerun
   # then run the emitted command with /tmp/fakerun substituted for the .gz.run
   ```
+
+- **The `_ha_cgc` certificate error is NOT sufficient to break a cluster.** Measured 2026-09-10
+  on a build that reached `In Sync` unaided and stayed healthy: the owner logged **8**
+  `_ha_cgc ... cannot load key/cert/chain` errors, `disc_ticks` and `tmm_restarted` were never
+  created, and config-sync came up on its own. TMM evidently reloads the profiles successfully
+  later in some runs. This is why the self-heal's restart is gated on `Disconnected` persisting
+  rather than on the log signature - had it been gated on the error, that healthy pair would have
+  had TMM restarted for no reason. Treat the error as a corroborating detail, never as a
+  diagnosis.
+
+- **Whether the trust exchange survives depends on the reboots being simultaneous.** Both builds
+  on 2026-09-10 hit the Root-missing path and rebooted. In the failing one only the OWNER rebooted
+  at 19:48 while the joiner was already past that stage and POSTed `add-to-trust` into the window
+  where `restjavad` was still starting - half-completing the exchange and leaving asymmetric
+  trust. In the successful one BOTH devices rebooted within a second of each other at 20:42, came
+  back together, and the joiner's first attempt at 20:51 returned OK. The pre-reboot uptime guard
+  (600s) is what tends to align them, since both instances launch at nearly the same moment; a
+  device that boots slower than its peer is the case to worry about.
 
 - **The clustering self-heal has no branch for "the channel is down".** Found 2026-09-10 on a
   17.5.1.9 build. `cluster-heal.sh` polls two states - trust formed, and In Sync - and logs a
