@@ -1281,6 +1281,109 @@ every build.
 
 ## 11. Troubleshooting
 
+### Start here: where the logs are, and what to run
+
+Start here for anything. Almost every question below is answered by one of these, and knowing
+which log holds which stage saves most of the guesswork.
+
+**The logs.** ⚙️ BIG-IP
+
+| Log | What it holds | Reach for it when |
+|---|---|---|
+| `/var/log/cloud/startup-script.log` | Everything the userdata does: the installer, runtime-init's progress, DO/AS3/CFE declarations as they are applied, and the cluster self-heal output | The box is not onboarding, or you want to watch a build happen |
+| `/var/log/cloud/bigIpRuntimeInit.log` | runtime-init's own log. **Absent = runtime-init never ran**, which is itself the diagnosis | Onboarding failed and you need the reason |
+| `/var/log/restnoded/restnoded.log` | The extensions at *runtime* — this is where CFE records failover events and route operations | A failover did not do what you expected |
+| `/var/log/ltm` | Traffic-management events, pool member state, virtual server activity | The VIP answers oddly or a pool is down |
+
+**Watch a build live:**
+
+```bash
+tail -f /var/log/cloud/startup-script.log
+```
+
+The cluster self-heal has no separate log — its output lands in `startup-script.log` alongside
+everything else. Retry loops there are normal, not stuck: it waits on device trust, which is
+the step that legitimately stretches builds toward 40 minutes.
+
+**Watch a failover live:**
+
+```bash
+tail -f /var/log/restnoded/restnoded.log | grep -i 'failover\|route\|next hop'
+```
+
+Want `Next hop address: 10.0.x.11` followed by `Route(s) updated successfully`. **`Next hop
+address: undefined` or `No route operations to run` means CFE did nothing** — and it still
+reports `taskState: SUCCEEDED`, so the log is the only place that truth appears.
+
+**Cluster state.** ⚙️ BIG-IP
+
+```bash
+tmsh show cm sync-status          # want: In Sync
+tmsh show cm failover-status      # want: one Active, one Standby
+tmsh show cm device-group failoverGroup
+tmsh list cm device                # device trust - both devices must appear
+```
+
+The prompt is the fastest read of all: `[admin@failover01:Standby:In Sync]` tells you hostname,
+failover state and sync state at a glance. `[admin@ip-10-0-1-11:Active:Standalone]` means
+onboarding never ran.
+
+**CFE state.** ⚙️ BIG-IP — run from the box, against its own loopback:
+
+```bash
+# what CFE believes it manages
+curl -su admin:<password> http://localhost:8100/mgmt/shared/cloud-failover/inspect \
+  | python3 -m json.tool
+
+# the live declaration, including the next-hop list
+curl -su admin:<password> -X POST http://localhost:8100/mgmt/shared/cloud-failover/declare \
+  -d '{"action":"discover"}' | python3 -m json.tool
+
+# version and status
+curl -su admin:<password> http://localhost:8100/mgmt/shared/cloud-failover/info
+```
+
+In the declaration, check `defaultNextHopAddresses.items`:
+
+```
+['10.0.0.11', '10.0.4.11']        ✅ bare addresses
+['10.0.0.11/24', '10.0.4.11']     ❌ a masked entry silently disables route updates
+```
+
+**If config-sync is stuck.** ⚙️ BIG-IP
+
+`Changes Pending (Sync Only)` right after onboarding is normal — `autoSync` is enabled and it
+clears itself. If it persists for more than a few minutes, push it by hand **from the device
+holding the configuration you want to keep**:
+
+```bash
+tmsh run cm config-sync to-group failoverGroup
+tmsh show cm sync-status
+```
+
+If that reports `Sync Failed`, or the status stays red after you have corrected the cause,
+force a full load from the source device. BIG-IP caches the last failure, so fixing the
+underlying problem alone can look like it changed nothing:
+
+```bash
+# ⚙️ BIG-IP - ONLY on the device whose config is correct; it overwrites the peer
+tmsh run cm config-sync force-full-load-push to-group failoverGroup
+tmsh show cm sync-status
+```
+
+> ⚠️ `force-full-load-push` pushes this device's configuration over its peer. Run it on the
+> wrong device and you overwrite the good config with the bad one. Confirm with
+> `tmsh show cm failover-status` and a look at the actual configuration first.
+
+The specific `Sync Failed` this solution is prone to — "Static route gateway ... is not
+directly connected via an interface" — has its own entry later in this section.
+
+**Re-run onboarding by hand.** ⚙️ BIG-IP — useful for testing a fix without a 50-minute rebuild:
+
+```bash
+f5-bigip-runtime-init --config-file /config/cloud/runtime-init.conf
+```
+
 ### The stack hangs for ~50 minutes and the admin password never works
 
 This is the highest-impact air-gap failure, and the symptoms point in a misleading
