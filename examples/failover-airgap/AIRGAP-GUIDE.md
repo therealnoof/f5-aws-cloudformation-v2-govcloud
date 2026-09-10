@@ -1471,7 +1471,8 @@ which log holds which stage saves most of the guesswork.
 
 | Log | What it holds | Reach for it when |
 |---|---|---|
-| `/var/log/cloud/startup-script.log` | Everything the userdata does: the installer, runtime-init's progress, DO/AS3/CFE declarations as they are applied, and the cluster self-heal output | The box is not onboarding, or you want to watch a build happen |
+| `/var/log/cloud/startup-script.log` | Everything the userdata does: the installer, runtime-init's progress, and the DO/AS3/CFE declarations as they are applied | The box is not onboarding, or you want to watch a build happen |
+| `/config/cluster-heal/log` | The clustering self-heal's own narration, one entry every 3 minutes: trust, device group, sync state, and the `cfn-signal` | Onboarding finished but the pair will not cluster |
 | `/var/log/cloud/bigIpRuntimeInit.log` | runtime-init's own log. **Absent = runtime-init never ran**, which is itself the diagnosis | Onboarding failed and you need the reason |
 | `/var/log/restnoded/restnoded.log` | The extensions at *runtime* — this is where CFE records failover events and route operations | A failover did not do what you expected |
 | `/var/log/ltm` | Traffic-management events, pool member state, virtual server activity | The VIP answers oddly or a pool is down |
@@ -1482,9 +1483,21 @@ which log holds which stage saves most of the guesswork.
 tail -f /var/log/cloud/startup-script.log
 ```
 
-The cluster self-heal has no separate log — its output lands in `startup-script.log` alongside
-everything else. Retry loops there are normal, not stuck: it waits on device trust, which is
-the step that legitimately stretches builds toward 40 minutes.
+**Watch the clustering self-heal:**
+
+```bash
+tail -f /config/cluster-heal/log
+```
+
+It writes here, not into `startup-script.log`, and appends one entry every 3 minutes. Repeated
+identical lines are normal rather than stuck — it waits on device trust, the step that
+legitimately stretches builds toward 40 minutes. Two lines are the exception: `waiting for owner
+to create failoverGroup` and `failoverGroup exists, waiting for In Sync` repeating for more than
+about 10 minutes, on devices that both report `Active`, means the config-sync channel is down —
+see "Both devices are Active and `Disconnected`" below.
+
+Marker files in `/config/cluster-heal/` record what it has already done: `rebooted`,
+`trust_tries`, `tmm_restarted`, `disc_ticks`, `signalled`, `done`.
 
 **Watch a failover live:**
 
