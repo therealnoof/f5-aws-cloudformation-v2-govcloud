@@ -1487,6 +1487,43 @@ declared. Never change a property of those route resources in a stack update —
 CloudFormation would re-point them at instance A regardless of which device is active. To
 change the prefix, redeploy.
 
+**A device rejoining after a stop needs a manual config-sync.** Verified 2026-09-10. Stop the
+Active instance and the survivor takes over cleanly, but when the stopped device is started
+again the pair comes back **`Changes Pending`**, not `In Sync`, and `autoSync` does **not**
+resolve it. Both devices report:
+
+```
+Summary  There is a possible change conflict between failover01.local and failover02.local.
+         datasync-global-dg (Changes Pending)
+          - Recommended action: Synchronize failover02.local to group datasync-global-dg
+```
+
+Nothing is broken. Both devices advanced their commit ids independently while they were apart —
+one by rebooting, the other by taking Active — so BIG-IP will not guess a direction and asks for
+one. `autoSync` propagates *changes*; a conflict is an ambiguity, not a change, so it has nothing
+to act on.
+
+**Do what the recommendation says, not what seems logical.** It names the source device and the
+group, and it is frequently not the device you would pick — in the verified run the survivor that
+had stayed up the whole time was *not* the source. Run it on the device the recommendation names:
+
+```bash
+# ⚙️ BIG-IP — on the device named in "Synchronize <device> to group <group>"
+tmsh run cm config-sync to-group datasync-global-dg
+tmsh show cm sync-status
+```
+
+Note the group is usually `datasync-global-dg`, a sync-only group carrying internal datasync
+state — **not** `failoverGroup`. If `failoverGroup` is not listed as pending, your LTM and AS3
+configuration is already synchronised and this is housekeeping.
+
+> **This is a manual operation by design, and worth telling a customer before they patch.** The
+> clustering self-heal handles exactly this case during a build — you can see
+> `recommended: sync this device -> datasync-global-dg` in `/config/cluster-heal/log` — but it
+> writes a `done` marker and removes its own cron once the cluster first reaches `In Sync`. It is
+> a build-time bootstrap, not a running-cluster babysitter. Anyone stopping an instance for
+> maintenance should expect `Changes Pending` on return and know the one command that clears it.
+
 ---
 
 ## 10. Tearing the stack down

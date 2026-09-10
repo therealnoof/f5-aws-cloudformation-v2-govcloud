@@ -17,6 +17,15 @@ duplication, and this file is what keeps the two from drifting.
 | **Convergence, automatic** | **12.6 s** - Active instance stopped with `aws ec2 stop-instances`, 2026-09-10, 17.5.1.9-0.0.12. Roughly double the commanded case: the survivor waits ~3 s of missed unicast heartbeats before declaring the peer down, which a commanded failover skips. **Quote this number, not the commanded one** - a customer's RTO has to survive an instance disappearing |
 | **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. (3) NAT gateways and two Elastic IPs were created in what was documented as a no-public-IP design, giving the private subnets internet egress - now `provisionNatGateways='false'`, with NTP moved to link-local. (4) `/LOCAL_ONLY` was assigned to the sync device group on the owner device, syncing a per-AZ default route to a peer that rejected it and leaving the cluster permanently `Sync Failed`. |
 
+**Rejoin after an instance stop needs a manual config-sync.** Verified 2026-09-10: the restarted
+device returns `Changes Pending` on `datasync-global-dg`, not `In Sync`, and `autoSync` does not
+resolve it - both devices advanced their commit ids while apart, so BIG-IP reports a possible
+change conflict and asks for a direction rather than guessing. Follow the recommendation, which
+names the source device and the group: in the verified run the source was the device that had
+been STOPPED, not the survivor that stayed up and took Active, which is the opposite of the
+intuitive answer. `cluster-heal.sh` handles this case during a build but has removed its own cron
+by then, so post-deployment this is manual - see the guide's section 9.
+
 **Automatic failover and rejoin verified 2026-09-10** for the first time. Every earlier
 measurement was a commanded failover, which skips detection entirely and therefore does not
 represent an instance being lost. Stopping the Active instance moved the VIP in 12.6 s
