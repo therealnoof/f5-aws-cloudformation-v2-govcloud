@@ -1273,6 +1273,56 @@ the old active device dies, and the page's auto-refresh re-establishes it. For *
 convergence, prefer the on-host loop in section 8; the tunnel adds a variable you do not
 want in the numbers.
 
+### 7.1 The management GUI, through the same tunnel
+
+The command above is not special to the VIP. **Only the `host` changes** — point it at a
+BIG-IP's management address instead and you get that device's TMUI in the same browser:
+
+```bash
+# 🖥️ WORKSTATION — failover01's management GUI
+aws ssm start-session --region "$REGION" --target "$JUMP" \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["10.0.1.11"],"portNumber":["443"],"localPortNumber":["8443"]}'
+# browse https://localhost:8443   —   admin / your Secrets Manager password
+```
+
+```bash
+# 🖥️ WORKSTATION — failover02's management GUI, in a second terminal
+aws ssm start-session --region "$REGION" --target "$JUMP" \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["10.0.5.11"],"portNumber":["443"],"localPortNumber":["8444"]}'
+# browse https://localhost:8444
+```
+
+| What you want to see | `host` | Local port | URL |
+|---|---|---|---|
+| The application VIP | `10.99.0.100` | `9443` | `https://localhost:9443` |
+| failover01 management (TMUI) | `10.0.1.11` | `8443` | `https://localhost:8443` |
+| failover02 management (TMUI) | `10.0.5.11` | `8444` | `https://localhost:8444` |
+
+Each `start-session` holds its own terminal, and each needs a **different** `localPortNumber`,
+so all three can be open at once. That is the arrangement worth having during a demo: the VIP
+page in one tab flipping between devices, and both TMUIs in others showing Active and Standby
+swapping in Device Management → Overview.
+
+The certificate warning on the management URLs is expected — that is the BIG-IP's own
+self-signed cert, not a proxy problem.
+
+> **The application objects are not in Common.** AS3 creates them under `Tenant_1`, in folders.
+> If Local Traffic → Virtual Servers looks empty, you are almost certainly looking at the wrong
+> folder rather than at a broken deployment — see
+> [section 5.1](#51-the-big-ip-web-gui-tmui) for where they are and why.
+
+**What to check in the GUI**, once you are in:
+
+| Where | What it confirms |
+|---|---|
+| Device Management → Overview | Both devices, one Active one Standby, green `In Sync` |
+| Local Traffic → Virtual Servers (folder `Tenant_1/HTTP_Service_01`) | `serviceMain` bound to `10.99.0.100` — an address in **no subnet**, which is the whole trick |
+| Network → Self IPs | `traffic-group-local-only` on every self IP — nothing floats |
+| Network → Routes | The default route in partition **LOCAL_ONLY**, via this device's own AZ gateway |
+| Security → Application Security → Policies | The WAF policy, fetched from your S3 bucket with no internet access |
+
 ---
 
 ## 8. Testing failover
