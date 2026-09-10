@@ -5,6 +5,10 @@ It exists so that the air-gap path (no Elastic IPs, route-based VIP failover) ca
 built and validated without touching the working EIP-based path. The price of that is
 duplication, and this file is what keeps the two from drifting.
 
+> **Before changing anything here, read [TEMPLATE-MAP.md](TEMPLATE-MAP.md).** It traces how
+> each value crosses from CloudFormation to the BIG-IP - via instance tags for small values,
+> S3 URLs for large ones - which is what most of the rules below are protecting.
+
 ## Validation record
 
 | | |

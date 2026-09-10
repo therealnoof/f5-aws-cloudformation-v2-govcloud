@@ -12,6 +12,11 @@
 - [Deleting this Solution](#deleting-this-solution)
 - [Maintaining](#maintaining)
 
+See also **[TEMPLATE-MAP.md](TEMPLATE-MAP.md)** — a dependency map that traces how each value
+gets from a CloudFormation parameter to a running BIG-IP object, with exact `file:line`
+references. Read that when you want to know *why* something works or where a value comes from;
+read [AIRGAP-GUIDE.md](AIRGAP-GUIDE.md) when you want to deploy it.
+
 ## Introduction
 
 This parent template deploys the same BIG-IP active/standby pair as

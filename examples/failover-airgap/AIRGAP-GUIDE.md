@@ -10,6 +10,12 @@ working stack. [`examples/failover/GOVCLOUD-GUIDE.md`](../failover/GOVCLOUD-GUID
 covers the *other* solution in this repository, the EIP-based failover pair; read it only
 if you are deploying that instead, or want more background on GovCloud generally.
 
+> **Want to know how it works rather than how to run it?**
+> [`TEMPLATE-MAP.md`](TEMPLATE-MAP.md) traces each value from the CloudFormation parameter you
+> set to the object it becomes on the BIG-IP — how the VIP got built, where the iRule came from,
+> how the artifacts reach an air-gapped box — with exact `file:line` references. This guide tells
+> you what to do; that one tells you where things sit.
+
 > ### ✅ Lab-validated
 > Deployed and failover-tested end to end in `us-gov-east-1` on **2026-09-08**, on the
 > 3-NIC PAYG BIG-IP 17.5.1.6 pair. VIP failover was verified in **both** directions across
