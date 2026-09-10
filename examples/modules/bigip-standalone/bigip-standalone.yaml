@@ -1440,7 +1440,7 @@ Resources:
             - |
               # Run
             - |
-              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml' ${INSTALLER_FLAGS}
+              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- "--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml${INSTALLER_FLAGS:+ ${INSTALLER_FLAGS}}"
             - |2+
 
             - |
@@ -1712,7 +1712,7 @@ Resources:
             - |
               # Run
             - |
-              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml' ${INSTALLER_FLAGS}
+              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- "--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml${INSTALLER_FLAGS:+ ${INSTALLER_FLAGS}}"
             - |2+
 
             - |
@@ -1978,7 +1978,7 @@ Resources:
             - |
               # Run
             - |
-              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- '--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml' ${INSTALLER_FLAGS}
+              bash "/var/config/rest/downloads/${PACKAGE_URL##*/}" -- "--cloud aws --telemetry-params templateName:v3.6.0.0/examples/modules/bigip-standalone/bigip-standalone.yaml${INSTALLER_FLAGS:+ ${INSTALLER_FLAGS}}"
             - |2+
 
             - |
