@@ -19,6 +19,8 @@
 #          -> cluster-heal-trust.py: fetch admin password (Secrets Manager, SigV4 via
 #             instance role) and POST /mgmt/tm/cm/add-to-trust to the peer.
 #        - OWNER (remoteHost is a /Common path) -> wait for the joiner.
+#        - a peer that is unreachable (rebooting) does NOT consume a retry; a peer that
+#          reports it is already trusted while we are not is ASYMMETRIC -> stop and say so.
 #   4a-bis. trust formed but config-sync stays Disconnected (TMM failed to load the
 #        device-trust cert chain for the _ha_cgc HA profiles) -> restart TMM ONCE.
 #   4b. trust formed -> elected owner (alphabetically-first device) creates failoverGroup
@@ -93,14 +95,46 @@ if [ "${NTRUST:-0}" -lt 2 ]; then
     exit 0
   fi
   PEERNAME=$(grep -oE '[A-Za-z0-9_-]+\.local' "$RTILOG" 2>/dev/null | sort -u | grep -vx "$MYHOST" | head -1)
+  # Asymmetric trust, detected on a previous tick. The peer has us in ITS trust domain while we
+  # do not have it in ours, so add-to-trust returns "already part of a trust-domain" forever and
+  # no number of retries can resolve it. Stop, and say so, rather than burning the retry budget
+  # and then falling silent. Lab-observed 2026-09-10.
+  if [ -f "$S/asym" ]; then
+    echo "ASYMMETRIC TRUST: peer has this device in its trust-domain but this device has only itself."
+    echo "Retrying cannot fix this - device trust must be reset. See the air-gap guide troubleshooting."
+    exit 0
+  fi
+
   T=$(cat "$S/trust_tries" 2>/dev/null || echo 0)
   if [ "$T" -ge 6 ]; then
     echo "add-to-trust attempted ${T}x, trust still not formed - manual recovery needed (see GOVCLOUD-GUIDE.md)"
     exit 0
   fi
-  echo $((T+1)) > "$S/trust_tries"
   echo "JOINER -> add-to-trust peer=${PEERIP} name=${PEERNAME} (attempt $((T+1)))"
-  python3 /config/cluster-heal-trust.py "$PEERIP" "$PEERNAME"
+
+  # Capture the helper's output so the outcome can be classified. It always prints one line:
+  # either "... OK: ..." or "... HTTP <code>: <body>".
+  TRUSTOUT=$(python3 /config/cluster-heal-trust.py "$PEERIP" "$PEERNAME" 2>&1)
+  echo "$TRUSTOUT"
+
+  case "$TRUSTOUT" in
+    *"already part of a trust-domain"*)
+      # The peer belongs to a trust domain we are not in. Half-completed exchange - see above.
+      touch "$S/asym"
+      echo "peer reports it is already in a trust-domain while we are not -> ASYMMETRIC, marking and stopping"
+      ;;
+    *"iControl session"*|*"Connection refused"*|*"timed out"*|*"URLError"*|*"HTTP 50"*)
+      # The peer was unreachable rather than unwilling - it is most likely rebooting, which this
+      # same script does to the OWNER when Root is missing. Do NOT count this as an attempt: the
+      # original failure came from a joiner exhausting its budget against a peer that was simply
+      # down for six minutes.
+      echo "peer unreachable (rebooting or REST not up yet) - NOT counting this as a trust attempt"
+      ;;
+    *)
+      echo $((T+1)) > "$S/trust_tries"
+      ;;
+  esac
+
   echo "add-to-trust attempt complete; re-check next tick"
   exit 0
 fi
@@ -141,8 +175,14 @@ if tmsh show cm sync-status 2>/dev/null | grep -qi "disconnected"; then
   # cause, but in the observed failure only one of the two devices logged it while both needed the
   # restart, so gating on it would skip the device that needs it most. Logging it either way tells
   # whoever reads this log afterwards which device hit the certificate race.
-  if grep -q '_ha_cgc.*cannot load key/cert/chain' /var/log/ltm 2>/dev/null; then
-    echo "config-sync Disconnected (tick ${DISC}); TMM logged a device-trust cert load failure (_ha_cgc)"
+  # Look at the tail first, so a failure that is still happening is distinguished from one that
+  # happened at boot and may already have been dealt with. Scanning the whole file unconditionally
+  # made every tick after a TMM restart still claim a certificate failure, which reads as though
+  # the restart achieved nothing.
+  if tail -n 500 /var/log/ltm 2>/dev/null | grep -q '_ha_cgc.*cannot load key/cert/chain'; then
+    echo "config-sync Disconnected (tick ${DISC}); TMM cert load failure (_ha_cgc) in the RECENT log"
+  elif grep -q '_ha_cgc.*cannot load key/cert/chain' /var/log/ltm 2>/dev/null; then
+    echo "config-sync Disconnected (tick ${DISC}); _ha_cgc cert failure logged EARLIER this boot (may predate a restart)"
   else
     echo "config-sync Disconnected (tick ${DISC}); no _ha_cgc cert error logged on this device"
   fi
