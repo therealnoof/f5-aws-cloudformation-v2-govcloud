@@ -257,12 +257,25 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   allow-service - completed correctly, so every configuration check passes and only
   `/var/log/ltm` shows the cause. Restarting TMM on the affected device recovers it.
 
-  **The improvement worth making:** have the script detect
-  `_ha_cgc.*cannot load key/cert/chain` in `/var/log/ltm` and restart TMM once, then continue
-  polling. That converts a hung build into a self-recovering one. Not yet implemented - it
-  changes runtime behaviour for `examples/failover` as well, and the script is carried as base64
-  inside four runtime-init config files, so the blob must be regenerated in all four and
-  verified to decode byte-identically.
+  **Implemented 2026-09-10** as step 4a-bis in `cluster-heal.sh`. Note what the field evidence
+  forced: the restart is NOT gated on the log signature, because only ONE of the two devices
+  logged the `_ha_cgc` error yet BOTH needed the restart before config-sync recovered. Gating on
+  the error would have missed the device that needed it most. It is gated instead on
+  `Disconnected` persisting for three consecutive ticks - cron runs every 3 minutes, so roughly
+  9 minutes, well inside the 50-minute stack timeout - and marker-gated so it happens at most
+  once. The `/var/log/ltm` check is retained for the log message only. A tick counter resets
+  whenever sync recovers, so a transient disconnect during normal formation cannot accumulate
+  toward a restart.
+
+  Verified before shipping: `bash -n` and `shellcheck` clean with no new findings versus HEAD
+  (the two pre-existing SC1083/SC2086 on the `tmsh ... devices add { $DEVS }` line are
+  intentional tmsh syntax); the branch logic exercised against five scenarios with a stubbed
+  `tmsh` - cert error present, cert error absent, healthy, escalation after restart, and counter
+  reset on recovery; the grep pattern matched against the verbatim log line from the failed
+  build; and the regenerated base64 decoded byte-identically to the source in all four config
+  files, with the `cluster-heal-trust.py` blob confirmed unchanged. The install command itself
+  was extracted from the parsed YAML and executed in a sandbox, confirming it writes the file
+  with mode 700 and the correct checksum.
 
   Whether the race is specific to 17.5.1.9 is unknown; it is a startup ordering problem and could
   plausibly occur on 17.5.1.6 too. It did not appear in any 17.5.1.6 build we ran.

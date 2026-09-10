@@ -19,6 +19,8 @@
 #          -> cluster-heal-trust.py: fetch admin password (Secrets Manager, SigV4 via
 #             instance role) and POST /mgmt/tm/cm/add-to-trust to the peer.
 #        - OWNER (remoteHost is a /Common path) -> wait for the joiner.
+#   4a-bis. trust formed but config-sync stays Disconnected (TMM failed to load the
+#        device-trust cert chain for the _ha_cgc HA profiles) -> restart TMM ONCE.
 #   4b. trust formed -> elected owner (alphabetically-first device) creates failoverGroup
 #        + force-syncs (plain tmsh, no password); each device acts on any
 #        "Synchronize <me> to group X" recommendation (covers datasync-global-dg).
@@ -101,6 +103,45 @@ if [ "${NTRUST:-0}" -lt 2 ]; then
   python3 /config/cluster-heal-trust.py "$PEERIP" "$PEERNAME"
   echo "add-to-trust attempt complete; re-check next tick"
   exit 0
+fi
+
+# 4a-bis. Trust is formed but the config-sync channel will not come up.
+# Lab-observed 2026-09-10: TMM loads the _ha_cgc_clientssl / _ha_cgc_serverssl profiles - the
+# SSL profiles for the HA config-sync channel - while installAuthorityTrust is still writing
+# the device-trust certificates, fails with "cannot load key/cert/chain", and never retries.
+# iQuery then opens a TCP connection to the peer and has no usable TLS, so every configuration
+# check passes (trust formed, configsync-ip correct, port 4353 reachable) while no session ever
+# forms. Both devices go Active, and the two waiting states below - "waiting for owner" on the
+# peer and "waiting for In Sync" on the owner - never terminate.
+#
+# Restarting TMM makes it re-read the completed chain. The restart is NOT gated on the log
+# signature: in the observed case only ONE device logged the _ha_cgc error, yet both needed the
+# restart before config-sync recovered. The log check is diagnostic only. Gated instead on
+# Disconnected persisting for several consecutive ticks, so a transient disconnect during normal
+# cluster formation does not trigger it, and marker-gated so it happens at most once.
+if tmsh show cm sync-status 2>/dev/null | grep -qi "disconnected"; then
+  DISC=$(cat "$S/disc_ticks" 2>/dev/null || echo 0)
+  case "$DISC" in ''|*[!0-9]*) DISC=0 ;; esac
+  DISC=$((DISC + 1))
+  echo "$DISC" > "$S/disc_ticks"
+  if grep -q '_ha_cgc.*cannot load key/cert/chain' /var/log/ltm 2>/dev/null; then
+    echo "config-sync Disconnected (tick ${DISC}); TMM logged a device-trust cert load failure (_ha_cgc)"
+  else
+    echo "config-sync Disconnected (tick ${DISC}); no _ha_cgc cert error logged on this device"
+  fi
+  if [ "$DISC" -ge 3 ] && [ ! -f "$S/tmm_restarted" ]; then
+    echo "Disconnected for ${DISC} consecutive ticks -> restarting TMM once to rebuild the HA SSL profiles"
+    touch "$S/tmm_restarted"
+    tmsh restart sys service tmm >/dev/null 2>&1
+    echo "TMM restart issued; re-checking next tick"
+    exit 0
+  fi
+  if [ "$DISC" -ge 6 ] && [ -f "$S/tmm_restarted" ]; then
+    echo "STILL Disconnected after a TMM restart - manual recovery needed; see the air-gap guide,"
+    echo "troubleshooting: 'Both devices are Active and Disconnected, and the self-heal loops forever'"
+  fi
+else
+  rm -f "$S/disc_ticks"
 fi
 
 # 4b. Trust formed. Ensure failoverGroup + sync via plain tmsh (no password).
