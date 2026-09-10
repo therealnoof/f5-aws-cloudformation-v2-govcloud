@@ -266,7 +266,10 @@ Two consequences worth internalising, because both produce answers that look rea
 
 **Prerequisites on the workstation:**
 
-- **A clone of this repository.** You run `aws s3 sync` from its root.
+- **A clone of this repository.** [Step 4.1](#41-get-the-files-and-know-where-you-are) has
+  the `git clone` command. Most of section 4 runs from inside it, using relative paths.
+- **`git`.** Pre-installed on macOS and most Linux distributions; on Windows use Git Bash
+  or WSL.
 - **The AWS CLI v2**, configured for your GovCloud account.
 - **Python 3** — used only to pretty-print JSON in the verification commands.
 - **The AWS Session Manager plugin.** This is a *separate install* from the AWS CLI and is
@@ -350,9 +353,45 @@ session-manager-plugin
 
 ## 4. Step-by-step deployment
 
-### 4.1 Set your variables
+### 4.1 Get the files, and know where you are
 
-Everything below uses these. Set them once per terminal session.
+Everything in section 4 runs 🖥️ **WORKSTATION**, from inside a clone of this repository.
+If you skip this step, later commands fail with "no such file or directory" — they use paths
+relative to the repository root.
+
+**Clone it.** `git` is pre-installed on macOS and most Linux distributions; on Windows use
+Git Bash or WSL.
+
+```bash
+cd ~
+git clone https://github.com/therealnoof/f5-aws-cloudformation-v2-govcloud.git
+cd f5-aws-cloudformation-v2-govcloud
+pwd
+ls
+```
+
+`pwd` prints where you are — it should end in `/f5-aws-cloudformation-v2-govcloud`. `ls` should
+list an `examples` directory. **This is your working directory for the whole of section 4.**
+
+> **If you open a new terminal later, `cd` back here first.** Commands such as
+> `aws s3 sync ./examples/` and `--parameters file://examples/...` are relative paths. Run them
+> from your home directory and they will not find anything — which usually looks like a
+> different error than "wrong directory", so it is worth checking `pwd` first when something
+> unexpected happens.
+
+**Already have a clone?** Make sure it is current — the BIG-IPs read what you upload from it,
+so a stale clone deploys stale templates:
+
+```bash
+cd ~/f5-aws-cloudformation-v2-govcloud
+git pull
+git log --oneline -1
+```
+
+**Set your variables.** These are used by nearly every command that follows. Shell variables
+live only in the terminal window where you set them, so **set them again in each new terminal**
+— an unset variable does not error, it silently expands to nothing and produces a malformed
+command that often *looks* like a real failure.
 
 ```bash
 REGION=us-gov-east-1
@@ -360,6 +399,15 @@ BUCKET=f5-cft-gov                                   # must be globally unique
 PREFIX=f5-aws-cloudformation-v2/v3.6.0.0/examples
 STACK=failover-airgap
 ```
+
+Check they took:
+
+```bash
+echo "REGION=$REGION  BUCKET=$BUCKET"
+echo "PREFIX=$PREFIX  STACK=$STACK"
+```
+
+Any of those printing blank after the `=` means the variable is not set in this terminal.
 
 > **zsh users:** zsh does not word-split unquoted variables the way bash does. Where a
 > command below takes a *list* (several route table IDs, for example), the IDs are written
@@ -413,28 +461,42 @@ of object, and they get there differently:
 - **BIG-IP artifacts** — the runtime-init installer and three extension RPMs. These are
   **not in the repo** and `s3 sync` will not copy them. Download and `cp` them separately.
 
-**Download the artifacts** (once, from a machine with internet):
+**Download the artifacts** (once, 🖥️ WORKSTATION, from a machine with internet).
+
+Run these from the repository root — the same directory as section 4.1. They download into an
+`artifacts/` folder beside `examples/`, which keeps them together and out of the way of
+`s3 sync` (that only ever copies `examples/`):
 
 ```bash
-curl -fL -o f5-bigip-runtime-init-2.0.3-1.gz.run \
+cd ~/f5-aws-cloudformation-v2-govcloud     # if you are not already here
+mkdir -p artifacts
+
+curl -fL -o artifacts/f5-bigip-runtime-init-2.0.3-1.gz.run \
   https://github.com/F5Networks/f5-bigip-runtime-init/releases/download/2.0.3/f5-bigip-runtime-init-2.0.3-1.gz.run
-curl -fL -o f5-declarative-onboarding-1.47.0-14.noarch.rpm \
+curl -fL -o artifacts/f5-declarative-onboarding-1.47.0-14.noarch.rpm \
   https://github.com/F5Networks/f5-declarative-onboarding/releases/download/v1.47.0/f5-declarative-onboarding-1.47.0-14.noarch.rpm
-curl -fL -o f5-appsvcs-3.56.0-10.noarch.rpm \
+curl -fL -o artifacts/f5-appsvcs-3.56.0-10.noarch.rpm \
   https://github.com/F5Networks/f5-appsvcs-extension/releases/download/v3.56.0/f5-appsvcs-3.56.0-10.noarch.rpm
-curl -fL -o f5-cloud-failover-2.4.0-0.noarch.rpm \
+curl -fL -o artifacts/f5-cloud-failover-2.4.0-0.noarch.rpm \
   https://github.com/F5Networks/f5-cloud-failover-extension/releases/download/v2.4.0/f5-cloud-failover-2.4.0-0.noarch.rpm
 
 # The GPG public key the installer uses to verify its own RPM signature.
 # Required — see the note in section 1. Without it the BIG-IPs never onboard.
-curl -fL -o gpg.key \
+curl -fL -o artifacts/gpg.key \
   https://f5-cft.s3.amazonaws.com/f5-bigip-runtime-init/gpg.key
+```
+
+Confirm you got five files, none of them tiny — a few hundred bytes means you captured an
+error page rather than the file:
+
+```bash
+ls -lh artifacts/
 ```
 
 > Check what you got: `gpg.key` should be about 3.2 KB and start with
 > `-----BEGIN PGP PUBLIC KEY BLOCK-----`. As of 2026-09 its SHA-256 is
 > `5e329086089056079b32f6828b2e2c6fde5dcae8bef62b1f06308af1ede7072b`
-> (`sha256sum gpg.key`). F5 may rotate the key; a mismatch is not automatically wrong,
+> (`sha256sum artifacts/gpg.key`). F5 may rotate the key; a mismatch is not automatically wrong,
 > but a file that does not begin with the PGP header is — you probably captured an
 > HTML error page.
 
@@ -442,20 +504,32 @@ curl -fL -o gpg.key \
 > config files, which the BIG-IP enforces at install time. If you change a version, update
 > its `extensionVersion` and `extensionHash` too.
 
-**Create the bucket and upload** (run `s3 sync` from the repository root):
+**Create the bucket and upload.** 🖥️ WORKSTATION, **from the repository root** — both the
+`./examples/` and `artifacts/...` paths below are relative to it:
 
 ```bash
+cd ~/f5-aws-cloudformation-v2-govcloud     # if you are not already here
+pwd                                        # sanity check before uploading anything
+
 aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
   --create-bucket-configuration LocationConstraint="$REGION"
 
+# the templates, from the repository
 aws s3 sync ./examples/ "s3://$BUCKET/$PREFIX/" --region "$REGION"
 
-aws s3 cp f5-bigip-runtime-init-2.0.3-1.gz.run           "s3://$BUCKET/$PREFIX/" --region "$REGION"
-aws s3 cp gpg.key                                        "s3://$BUCKET/$PREFIX/" --region "$REGION"
-aws s3 cp f5-declarative-onboarding-1.47.0-14.noarch.rpm "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
-aws s3 cp f5-appsvcs-3.56.0-10.noarch.rpm                "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
-aws s3 cp f5-cloud-failover-2.4.0-0.noarch.rpm           "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
+# the five artifacts, from the folder you just downloaded them into
+aws s3 cp artifacts/f5-bigip-runtime-init-2.0.3-1.gz.run           "s3://$BUCKET/$PREFIX/" --region "$REGION"
+aws s3 cp artifacts/gpg.key                                        "s3://$BUCKET/$PREFIX/" --region "$REGION"
+aws s3 cp artifacts/f5-declarative-onboarding-1.47.0-14.noarch.rpm "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
+aws s3 cp artifacts/f5-appsvcs-3.56.0-10.noarch.rpm                "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
+aws s3 cp artifacts/f5-cloud-failover-2.4.0-0.noarch.rpm           "s3://$BUCKET/$PREFIX/bigip-extensions/" --region "$REGION"
 ```
+
+> **Why two different commands.** `s3 sync` copies a whole directory tree and skips what has
+> not changed — right for the templates, which is why it points at `./examples/`. `s3 cp`
+> copies one named file and always overwrites — right for the artifacts, which are not in the
+> repository at all. The two are not interchangeable, and `sync` will never upload the
+> artifacts no matter how many times you run it.
 
 > ⚠️ **Never add `--delete` to that sync.** The installer and RPMs live only in the bucket,
 > not in the repo, so `--delete` would remove them and every BIG-IP would fail to onboard.
@@ -680,7 +754,14 @@ wildcarded, e.g. `*17.5.1.9-0.0.12*PAYG-Best Plus 25Mbps*`.
 
 ### 4.7 Fill in the parameters
 
-Edit `examples/failover-airgap/failover-airgap-parameters.json`.
+Edit the parameters file in your clone — 🖥️ WORKSTATION, from the repository root:
+
+```bash
+cd ~/f5-aws-cloudformation-v2-govcloud
+# open examples/failover-airgap/failover-airgap-parameters.json in any text editor
+```
+
+It is a plain JSON list of `ParameterKey` / `ParameterValue` pairs. Change only the values.
 
 **Two parameters have no default — CloudFormation will not launch without them:**
 
@@ -732,7 +813,12 @@ The full parameter reference is in [README.md](README.md#template-input-paramete
 
 ### 4.8 Launch
 
+🖥️ WORKSTATION, **from the repository root** — `--parameters file://examples/...` is a relative
+path and fails from anywhere else:
+
 ```bash
+cd ~/f5-aws-cloudformation-v2-govcloud     # if you are not already here
+
 aws cloudformation create-stack --region "$REGION" \
   --stack-name "$STACK" \
   --template-url "https://${BUCKET}.s3.${REGION}.amazonaws.com/${PREFIX}/failover-airgap/failover-airgap.yaml" \
