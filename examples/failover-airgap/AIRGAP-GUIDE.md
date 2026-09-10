@@ -1769,6 +1769,124 @@ The same symptom has been reported on unrelated CIS + AS3 deployments, so treat 
 worth running on any release rather than assuming only 17.5.1.6 is affected — it costs one
 command.
 
+### Both devices are Active and `Disconnected`, and the self-heal loops forever
+
+A split brain the clustering self-heal cannot escape. The signature is that the two devices
+**disagree about whether the device group exists**:
+
+```
+failover01:  [admin@failover01:Active:Disconnected] ~ #
+             cluster-heal log: "failoverGroup exists, waiting for In Sync"
+
+failover02:  [admin@failover02:Active:Disconnected (Sync Only)] ~ #
+             cluster-heal log: "trust formed; waiting for owner (failover01.local) to create failoverGroup"
+```
+
+Both Active means neither can see the other, so each took Active. The self-heal will log those
+two reassuring messages every three minutes indefinitely — it has no branch for "the channel is
+down", so a build that is already unrecoverable looks like a build that is still progressing.
+
+**Work through it in this order.** Everything here comes back healthy, which is the point — the
+fault is below the configuration.
+
+```bash
+# ⚙️ BIG-IP - on BOTH devices
+tmsh list cm device-group one-line          # does failoverGroup exist on each?
+tmsh list cm device one-line | cut -c1-80   # is trust formed? both devices listed?
+tmsh list cm device failover01.local configsync-ip unicast-address
+tmsh list cm device failover02.local configsync-ip unicast-address
+tmsh list net self external-self allow-service
+```
+
+`configsync-ip` must be `10.0.0.11` / `10.0.4.11` and agree on both devices. `allow-service`
+must contain `tcp:f5-iquery` (4353), `tcp:https` (443) and `udp:cap` (1026).
+
+**Then test the path — and use the right tool:**
+
+```bash
+# ⚙️ BIG-IP - failover01
+timeout 3 bash -c '</dev/tcp/10.0.4.11/4353' && echo "4353 OPEN" || echo "4353 BLOCKED"
+timeout 3 bash -c '</dev/tcp/10.0.4.11/443'  && echo "443 OPEN"  || echo "443 BLOCKED"
+```
+
+> **`ping` is not a valid test here and will mislead you.** Neither the self-IP `allow-service`
+> list nor the AWS security group permits ICMP, so ping fails against a perfectly healthy peer.
+> `nc -z` is also unavailable — BIG-IP ships Ncat, which rejects `-z`. Bash's `/dev/tcp` works
+> and needs nothing installed.
+
+**If the ports are open and everything above is correct, the fault is TLS on the HA channel.**
+Look for this:
+
+```bash
+# ⚙️ BIG-IP - on BOTH devices
+grep -i '_ha_cgc' /var/log/ltm | tail -10
+```
+
+```
+crit tmm[3597]: 01260030:2: Profile _ha_cgc_clientssl - cannot load key/cert/chain:
+  .../dtdi.key_98435_1 /.../dtdi.crt_98433_2 /.../dtca-bundle.crt_98441_1: Unknown error.
+```
+
+`_ha_cgc_clientssl` and `_ha_cgc_serverssl` are the SSL profiles for the config-sync channel.
+TMM could not load the device-trust certificate chain, so iQuery opens a TCP connection and then
+has no usable TLS — which is why the port test passes while no session ever forms.
+
+**It is a race, and the timestamps show it.** Compare the TMM error against the trust
+installation in the same log:
+
+| Time | Event |
+|---|---|
+| 18:22:01 | `install_authority_trust` starts — certificates being written |
+| **18:22:02** | **TMM loads them mid-write and fails** |
+| 18:22:12 | `installAuthorityTrust complete` — certificates now valid |
+| 18:22:19 | `device_trust_group` sync completes |
+
+TMM fails ten seconds before the certificates finish installing and never retries. Everything
+downstream completes correctly, which is why every configuration check passes.
+
+**Recovery.** Restart TMM so it re-reads the completed chain. Both devices are already Active
+and serving nothing coherently, so there is no HA to lose:
+
+```bash
+# ⚙️ BIG-IP - on the device(s) showing _ha_cgc errors
+tmsh restart sys service tmm
+```
+
+Wait about a minute, then confirm no `_ha_cgc` errors appear *after* the restart timestamp. The
+first device to recover will drop from `Active` to `Standby` — that is the unicast failover
+channel (UDP 1026) coming back, and it resolves the split brain.
+
+Config-sync (4353) is a separate channel and may need more. If the peer still has no
+`failoverGroup`, restart TMM on it too — a restart rebuilds the HA profiles from the current
+filestore even with no cert errors logged on that side. Then re-trigger propagation from the
+owner:
+
+```bash
+# ⚙️ BIG-IP - failover01 ONLY, the device that owns the group
+tmsh modify cm device-group failoverGroup devices delete { failover02.local }
+tmsh modify cm device-group failoverGroup devices add { failover02.local }
+tmsh save sys config
+```
+
+Once the peer has the group you will pass through `Awaiting Initial Sync` and `Changes Pending`.
+Check `/LOCAL_ONLY` on both devices **before** the first sync — it is the initial sync that
+trips over a per-AZ route — then push from the owner:
+
+```bash
+# ⚙️ BIG-IP - failover01
+tmsh run cm config-sync to-group failoverGroup
+tmsh show cm sync-status
+```
+
+> **Direction matters more than usual here.** Both devices onboarded independently, so each holds
+> a complete configuration of its own. `Awaiting Initial Sync` means BIG-IP has no opinion about
+> which is authoritative — whichever you push from wins. Push from the device that owns
+> `failoverGroup`.
+
+**Is it worth rescuing the stack?** Usually not. `cfn-signal` never fires while this is
+happening, so CloudFormation times out regardless. Recover the pair to confirm the diagnosis,
+then rebuild.
+
 ### `SessionManagerPlugin is not found`
 
 The Session Manager plugin is not installed on your workstation. It is a separate install

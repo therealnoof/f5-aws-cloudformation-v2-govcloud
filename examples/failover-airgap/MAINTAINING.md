@@ -242,6 +242,31 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   # then run the emitted command with /tmp/fakerun substituted for the .gz.run
   ```
 
+- **The clustering self-heal has no branch for "the channel is down".** Found 2026-09-10 on a
+  17.5.1.9 build. `cluster-heal.sh` polls two states - trust formed, and In Sync - and logs a
+  reassuring message every three minutes in either. When the config-sync channel itself fails to
+  establish, the two devices settle into a split brain that satisfies neither exit condition:
+  the owner logs "failoverGroup exists, waiting for In Sync" while the peer logs "trust formed;
+  waiting for owner to create failoverGroup", indefinitely. The build is unrecoverable but looks
+  like it is still progressing, so the 50-minute timeout is the first signal anything is wrong.
+
+  The underlying fault was a race in TMOS, not in our templates: TMM loaded the `_ha_cgc_*` SSL
+  profiles for the HA channel ten seconds before `installAuthorityTrust` finished writing the
+  device-trust certificates, failed with "cannot load key/cert/chain", and never retried.
+  Everything downstream - trust records, device group membership, configsync-ip, self-IP
+  allow-service - completed correctly, so every configuration check passes and only
+  `/var/log/ltm` shows the cause. Restarting TMM on the affected device recovers it.
+
+  **The improvement worth making:** have the script detect
+  `_ha_cgc.*cannot load key/cert/chain` in `/var/log/ltm` and restart TMM once, then continue
+  polling. That converts a hung build into a self-recovering one. Not yet implemented - it
+  changes runtime behaviour for `examples/failover` as well, and the script is carried as base64
+  inside four runtime-init config files, so the blob must be regenerated in all four and
+  verified to decode byte-identically.
+
+  Whether the race is specific to 17.5.1.9 is unknown; it is a startup ordering problem and could
+  plausibly occur on 17.5.1.6 too. It did not appear in any 17.5.1.6 build we ran.
+
 - **Source/dest check** is disabled through the ENI resource, so it survives reboots and
   redeploys. Do not replace it with a post-deploy script.
 - **Shared-module parameters must keep defaults that preserve existing behaviour.** The
