@@ -380,11 +380,22 @@ list an `examples` directory. **This is your working directory for the whole of 
 > different error than "wrong directory", so it is worth checking `pwd` first when something
 > unexpected happens.
 
+> **Cloned somewhere else, or renamed the directory?** That is fine — nothing depends on the
+> path or the folder name, only on being *inside* the clone. Everywhere below that says to return
+> to the repository root, this works from any subdirectory of it regardless of where it lives:
+>
+> ```bash
+> cd "$(git rev-parse --show-toplevel)"
+> ```
+>
+> If that prints `not a git repository`, you are outside the clone entirely — `cd` to it first.
+
 **Already have a clone?** Make sure it is current — the BIG-IPs read what you upload from it,
-so a stale clone deploys stale templates:
+so a stale clone deploys stale templates. Run this **inside your existing clone**, wherever it is:
 
 ```bash
-cd ~/f5-aws-cloudformation-v2-govcloud
+cd "$(git rev-parse --show-toplevel)"
+git remote -v          # confirm this is the right repository
 git pull
 git log --oneline -1
 ```
@@ -469,7 +480,7 @@ Run these from the repository root — the same directory as section 4.1. They d
 `s3 sync` (that only ever copies `examples/`):
 
 ```bash
-cd ~/f5-aws-cloudformation-v2-govcloud     # if you are not already here
+cd "$(git rev-parse --show-toplevel)"     # jump to the repository root from anywhere inside it
 mkdir -p artifacts
 
 curl -fL -o artifacts/f5-bigip-runtime-init-2.0.3-1.gz.run \
@@ -509,7 +520,7 @@ ls -lh artifacts/
 `./examples/` and `artifacts/...` paths below are relative to it:
 
 ```bash
-cd ~/f5-aws-cloudformation-v2-govcloud     # if you are not already here
+cd "$(git rev-parse --show-toplevel)"     # jump to the repository root from anywhere inside it
 pwd                                        # sanity check before uploading anything
 
 aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
@@ -758,7 +769,7 @@ wildcarded, e.g. `*17.5.1.9-0.0.12*PAYG-Best Plus 25Mbps*`.
 Edit the parameters file in your clone — 🖥️ WORKSTATION, from the repository root:
 
 ```bash
-cd ~/f5-aws-cloudformation-v2-govcloud
+cd "$(git rev-parse --show-toplevel)"
 # open examples/failover-airgap/failover-airgap-parameters.json in any text editor
 ```
 
@@ -818,7 +829,7 @@ The full parameter reference is in [README.md](README.md#template-input-paramete
 path and fails from anywhere else:
 
 ```bash
-cd ~/f5-aws-cloudformation-v2-govcloud     # if you are not already here
+cd "$(git rev-parse --show-toplevel)"     # jump to the repository root from anywhere inside it
 
 aws cloudformation create-stack --region "$REGION" \
   --stack-name "$STACK" \
