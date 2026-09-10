@@ -645,9 +645,37 @@ An empty result means the pinned default is not in your Region — find one that
 `bigIpImage` to a pattern pinned to that version and build with the trailing timestamp
 wildcarded, e.g. `*21.1.0.2-0.0.22*PAYG-Best Plus 25Mbps*`.
 
-> ⚠️ **Use a "Best" image.** The onboarding declaration provisions ASM and the AS3
-> declaration attaches a WAF policy. ASM exists only in the **Best** bundle — a "Good" or
-> "Better" image onboards partway and then fails.
+> ⚠️ **The image must include ASM.** The onboarding declaration provisions `asm: nominal` and
+> the AS3 declaration attaches a WAF policy, so a bundle without ASM onboards partway and then
+> fails.
+>
+> | Bundle | Includes ASM | Use it here |
+> |---|---|---|
+> | Good | No | ❌ |
+> | Better | No | ❌ |
+> | Best / Best Plus | Yes | ✅ |
+> | Adv WAF / Adv WAF Plus | Yes — Advanced WAF is the ASM successor | ✅ |
+>
+> **Do not assume "Best" is available for your version.** F5 has been moving PAYG listings onto
+> the Advanced WAF naming, so which bundles exist varies by release. List what is actually
+> published before you pin anything:
+>
+> ```bash
+> aws ec2 describe-images --region "$REGION" --owners aws-marketplace \
+>   --filters "Name=name,Values=F5 BIGIP-*" --query 'Images[].Name' --output text \
+>   | tr '\t' '\n' \
+>   | sed -E 's/^F5 BIGIP-([^ ]+) (.*)-[0-9]{12}-[0-9a-f-]+$/\1  \2/' \
+>   | sort -u
+> ```
+>
+> That prints one `version  bundle` line per published image, which is the quickest way to see
+> which bundles a given release actually offers. If you pick an Adv WAF image, confirm the
+> bundle also carries LTM on the first build — the virtual servers need it:
+>
+> ```bash
+> # ⚙️ BIG-IP
+> tmsh show sys provision
+> ```
 
 ### 4.7 Fill in the parameters
 
