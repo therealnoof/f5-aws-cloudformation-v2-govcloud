@@ -168,6 +168,41 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   extracts it without running it. Worth repeating whenever the pinned runtime-init version
   changes - a new release could add or move a bootstrap fetch.
 
+- **Flags for the runtime-init installer must go INSIDE the single argument, not after it.**
+  The invocation in `modules/bigip-standalone` userdata is:
+
+  ```
+  bash "...gz.run" -- "--cloud aws --telemetry-params ...${INSTALLER_FLAGS:+ ${INSTALLER_FLAGS}}"
+  ```
+
+  The first attempt appended the flags as separate shell words *after* the quoted argument.
+  That renders correctly, passes `bash -n`, and does not work. Proven on a live instance:
+  the userdata contained a correct `--key https://<bucket>/gpg.key` and `install_rpm.sh`
+  still reported its default commercial-partition key location and looped on the
+  unreachable fetch.
+
+  The reason shows up in the argv shape. Appended outside the quotes the words land in
+  `argv[3..5]`; makeself forwards the first argument after `--` to the embedded setup
+  script, so nothing past `argv[2]` is ever seen. Every flag that does work today -
+  `--cloud`, `--telemetry-params` - is inside that one argument.
+
+  `${VAR:+ $VAR}` supplies the joining space only when the value is non-empty, so an empty
+  value reproduces the original argument byte-for-byte and the other examples are
+  unaffected.
+
+  **The lesson generalises:** rendering the right text is not evidence that an argument is
+  received. When adding a flag here, prove the argv shape rather than reading the line -
+  a stub is enough:
+
+  ```bash
+  cat > /tmp/fakerun <<'EOF'
+  #!/bin/bash
+  i=0; for a in "$@"; do i=$((i+1)); printf 'argv[%d]=[%s]\n' "$i" "$a"; done
+  EOF
+  chmod +x /tmp/fakerun
+  # then run the emitted command with /tmp/fakerun substituted for the .gz.run
+  ```
+
 - **Source/dest check** is disabled through the ENI resource, so it survives reboots and
   redeploys. Do not replace it with a post-deploy script.
 - **Shared-module parameters must keep defaults that preserve existing behaviour.** The
