@@ -119,28 +119,73 @@ fi
 # restart before config-sync recovered. The log check is diagnostic only. Gated instead on
 # Disconnected persisting for several consecutive ticks, so a transient disconnect during normal
 # cluster formation does not trigger it, and marker-gated so it happens at most once.
+# "Disconnected" is what sync-status reports when the iQuery session between the devices is not
+# established. It appears on BOTH devices, whichever mode they are in (high-availability on the
+# owner, sync-only on a peer that has no failover device group yet), so this one test covers both.
 if tmsh show cm sync-status 2>/dev/null | grep -qi "disconnected"; then
+
+  # Count CONSECUTIVE disconnected ticks in a file, because each cron run is a separate process
+  # and cannot remember the last one. The counter is deleted the moment sync is healthy (see the
+  # else branch at the bottom), so this only ever counts an unbroken run of failures.
   DISC=$(cat "$S/disc_ticks" 2>/dev/null || echo 0)
+
+  # Defensive: if the counter file is empty or somehow not a number, treat it as 0. Without this,
+  # $((DISC + 1)) below would abort the script under "set -u" / arithmetic errors and the
+  # self-heal would stop running entirely. '*[!0-9]*' matches any string containing a non-digit.
   case "$DISC" in ''|*[!0-9]*) DISC=0 ;; esac
+
   DISC=$((DISC + 1))
   echo "$DISC" > "$S/disc_ticks"
+
+  # Diagnostic only - this does NOT decide whether to restart. The certificate error is the known
+  # cause, but in the observed failure only one of the two devices logged it while both needed the
+  # restart, so gating on it would skip the device that needs it most. Logging it either way tells
+  # whoever reads this log afterwards which device hit the certificate race.
   if grep -q '_ha_cgc.*cannot load key/cert/chain' /var/log/ltm 2>/dev/null; then
     echo "config-sync Disconnected (tick ${DISC}); TMM logged a device-trust cert load failure (_ha_cgc)"
   else
     echo "config-sync Disconnected (tick ${DISC}); no _ha_cgc cert error logged on this device"
   fi
+
+  # Restart TMM once, after 3 consecutive disconnected ticks. Cron runs this script every 3
+  # minutes, so 3 ticks is roughly 9 minutes - long enough that a brief disconnect during normal
+  # cluster formation is never mistaken for this fault, and short enough to leave plenty of room
+  # inside the stack's 50-minute CreationPolicy timeout for the cluster to form afterwards.
+  #
+  # Restarting TMM interrupts data plane traffic. That is acceptable here and only here: this
+  # branch is reached only when the cluster has never synced, which means the pair is not yet
+  # serving a working HA configuration anyway.
   if [ "$DISC" -ge 3 ] && [ ! -f "$S/tmm_restarted" ]; then
     echo "Disconnected for ${DISC} consecutive ticks -> restarting TMM once to rebuild the HA SSL profiles"
+
+    # Write the marker BEFORE restarting, not after. Restarting TMM can kill this script mid-run;
+    # if the marker were written afterwards it might never be written at all, and every subsequent
+    # tick would restart TMM again - an endless restart loop that would be far worse than the
+    # deadlock this is fixing.
     touch "$S/tmm_restarted"
+
     tmsh restart sys service tmm >/dev/null 2>&1
+
+    # Stop here rather than falling through to the group-creation logic below. TMM takes up to a
+    # minute to come back, and any tmsh command issued in the meantime would act on an
+    # inconsistent view of the system. The next cron tick re-evaluates from the top.
     echo "TMM restart issued; re-checking next tick"
     exit 0
   fi
+
+  # Three more ticks (about 9 further minutes) after the restart with no improvement means this is
+  # not the certificate race, or not only that. Say so plainly instead of continuing to log a
+  # reassuring "waiting for In Sync" - that silence is exactly what made the original failure take
+  # an hour to spot. Deliberately does NOT exit: the steps below are harmless and may still help.
   if [ "$DISC" -ge 6 ] && [ -f "$S/tmm_restarted" ]; then
     echo "STILL Disconnected after a TMM restart - manual recovery needed; see the air-gap guide,"
     echo "troubleshooting: 'Both devices are Active and Disconnected, and the self-heal loops forever'"
   fi
+
 else
+  # Sync is not Disconnected, so any previous run of failures is over. Clearing the counter is what
+  # makes the threshold above mean "3 consecutive", not "3 in total since boot" - without this, a
+  # few unrelated blips over a long uptime would eventually add up and restart TMM on a healthy pair.
   rm -f "$S/disc_ticks"
 fi
 
