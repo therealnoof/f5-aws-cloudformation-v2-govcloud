@@ -1412,6 +1412,52 @@ number to put in front of a customer for a design measured between 6 and 10.
 > Note this is *better* than route-based failover is usually assumed to be. Earlier drafts
 > of this guide estimated "tens of seconds"; the measured behaviour stays under ten.
 
+### Automatic failover — losing the instance outright
+
+Everything above is a **commanded** failover: `run sys failover standby` tells the peer to take
+over immediately. That is not what a real outage looks like. When an instance simply disappears,
+the survivor has to *notice* first — it waits for missed unicast failover heartbeats on UDP 1026,
+roughly 3 seconds of silence, before declaring the peer down. Only then does CFE move the route.
+
+Measured 2026-09-10, `us-gov-east-1`, 17.5.1.9-0.0.12, by stopping the Active instance with
+`aws ec2 stop-instances` while polling the VIP from the jump host:
+
+```
+21:35:17.87  failover02.local     <- last good response
+21:35:18.39  DOWN
+   ... 8 consecutive failures ...
+21:35:30.48  failover01.local     <- first good response
+```
+
+**12.6 seconds**, last-good to first-good. Roughly double the commanded case, which is expected
+and not a fault — the extra time is detection, which a commanded failover skips entirely.
+
+> **Quote the automatic number, not the commanded one.** A customer's RTO has to survive an
+> instance being lost, not an administrator asking politely. **15 seconds** is a reasonable
+> figure to put in front of one for a design measured at 12.6.
+
+> ⚠️ **Do not measure this by counting poll iterations.** A tick is `sleep` *plus* however long
+> `curl` takes, and `curl` behaves differently depending on the failure: a refused connection
+> fails instantly, while a route pointing at a stopped instance black-holes and burns the full
+> `-m` timeout. In the run above eight ticks spanned 12.6 s, about 1.5 s each — counting them as
+> 0.5 s ticks would have reported 4 seconds. **Always use the timestamps.** This loop prints only
+> transitions, so the two numbers you need are the only ones on screen:
+>
+> ```bash
+> # 🔒 JUMP HOST
+> prev=""
+> while true; do
+>   t=$(date +%H:%M:%S.%3N)
+>   c=$(curl -s -m 2 -o /dev/null -w '%{http_code}' http://10.99.0.100/ 2>/dev/null || echo 000)
+>   [ "$c" != "$prev" ] && { echo "$t  $c"; prev=$c; }
+>   sleep 0.5
+> done
+> ```
+
+Bring the instance back with `aws ec2 start-instances` afterwards. It should rejoin as
+**Standby** — failover01 holds the route and has no reason to give it up — and the pair should
+return to `In Sync` without intervention.
+
 ---
 
 ## 9. What to plan for

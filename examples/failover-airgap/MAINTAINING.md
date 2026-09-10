@@ -13,8 +13,17 @@ duplication, and this file is what keeps the two from drifting.
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
 | **Default image now** | BIG-IP 17.5.1.9-0.0.12, Best Plus 25Mbps - one patch newer than validated, see note below |
 | **Result** | Deployed end to end; VIP failover verified in **both** directions |
-| **Convergence** | 6-10 s each way (in-VPC client, 0.5 s poll, last-good to first-good; runs: 9.58 s / ~6 s / 9.58 s) |
+| **Convergence, commanded** | 6-10 s each way (in-VPC client, 0.5 s poll, last-good to first-good; runs: 9.58 s / ~6 s / 9.58 s) |
+| **Convergence, automatic** | **12.6 s** - Active instance stopped with `aws ec2 stop-instances`, 2026-09-10, 17.5.1.9-0.0.12. Roughly double the commanded case: the survivor waits ~3 s of missed unicast heartbeats before declaring the peer down, which a commanded failover skips. **Quote this number, not the commanded one** - a customer's RTO has to survive an instance disappearing |
 | **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. (3) NAT gateways and two Elastic IPs were created in what was documented as a no-public-IP design, giving the private subnets internet egress - now `provisionNatGateways='false'`, with NTP moved to link-local. (4) `/LOCAL_ONLY` was assigned to the sync device group on the owner device, syncing a per-AZ default route to a peer that rejected it and leaving the cluster permanently `Sync Failed`. |
+
+**Automatic failover and rejoin verified 2026-09-10** for the first time. Every earlier
+measurement was a commanded failover, which skips detection entirely and therefore does not
+represent an instance being lost. Stopping the Active instance moved the VIP in 12.6 s
+(21:35:17.87 last good -> 21:35:30.48 first good, 8 failed polls between). Measure this by
+timestamp, never by counting poll iterations: a tick is `sleep` plus however long `curl` takes,
+and a black-holed route burns the full timeout while a refused connection fails instantly - the
+same 8 ticks would read as 4 s or 20 s depending on which.
 
 **2026-09-10 build** confirmed, in one deployment, every fix working together: runtime-init
 installed from the staged `gpg.key`, DO applied with link-local NTP and DNS, device trust and
