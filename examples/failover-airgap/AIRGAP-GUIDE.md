@@ -15,11 +15,12 @@ if you are deploying that instead, or want more background on GovCloud generally
 > 3-NIC PAYG BIG-IP 17.5.1.6 pair. VIP failover was verified in **both** directions across
 > several runs and converged in **6-10 seconds**. Quote **10 seconds** to a customer for
 > headroom. See [section 8](#8-testing-failover) for the method and the raw numbers.
-> **Note the image change.** The default is now **BIG-IP 21.1.0.2-0.0.22**. It was moved off
+> **Note the image change.** The default is now **BIG-IP 17.5.1.9-0.0.12, Best Plus 25Mbps** —
+> the same bundle and throughput as the validated build, one patch newer. It was moved off
 > 17.5.1.6 because a defect in that release scopes the admin user to the `Common` partition:
 > `tmsh` lists the AS3-created application objects normally, but the GUI shows nothing under
-> `Tenant_1`. **The validation above was performed on 17.5.1.6 — 21.1.0.2 has not yet been
-> through it.**
+> `Tenant_1`. **Whether 17.5.1.9 carries the fix is unconfirmed** — see the troubleshooting
+> entry for the one-line check and the workaround that applies to any version.
 
 ---
 
@@ -637,13 +638,13 @@ availability differs by Region:
 
 ```bash
 aws ec2 describe-images --region "$REGION" --owners aws-marketplace \
-  --filters "Name=name,Values=*21.1.0.2-0.0.22*PAYG-Best Plus 25Mbps*" \
+  --filters "Name=name,Values=*17.5.1.9-0.0.12*PAYG-Best Plus 25Mbps*" \
   --query 'reverse(sort_by(Images,&CreationDate))[].[Name,ImageId,CreationDate]' --output table
 ```
 
 An empty result means the pinned default is not in your Region — find one that is, and set
 `bigIpImage` to a pattern pinned to that version and build with the trailing timestamp
-wildcarded, e.g. `*21.1.0.2-0.0.22*PAYG-Best Plus 25Mbps*`.
+wildcarded, e.g. `*17.5.1.9-0.0.12*PAYG-Best Plus 25Mbps*`.
 
 > ⚠️ **The image must include ASM.** The onboarding declaration provisions `asm: nominal` and
 > the AS3 declaration attaches a WAF policy, so a bundle without ASM onboards partway and then
@@ -1612,6 +1613,70 @@ ssh -i ~/.ssh/<your-key>.pem -p 2222 admin@localhost
 
 Then use the `hostname` test from the first entry in this section to tell "still working" from
 "never started".
+
+### The GUI shows the DO objects but none of the AS3 application objects
+
+A working deployment that looks empty in TMUI. Device Management, Self IPs, VLANs and Routes
+are all there — everything Declarative Onboarding created in `Common` — but Local Traffic shows
+no virtual servers, no pool, no iRule, and switching through every partition changes nothing.
+
+Two unrelated causes produce the identical symptom. Rule them out in this order.
+
+**First, is it a navigation problem?** AS3 nests its objects in folders, so selecting the
+`Tenant_1` partition shows an empty screen because nothing sits directly in it. That, plus TMUI
+reading the partition list only at login, accounts for most cases — see
+[section 5.1](#51-the-big-ip-web-gui-tmui) for the folder layout and the fix. **Log out and back
+in first.**
+
+**If re-login and folder navigation do not reveal them, check partition access.** ⚙️ BIG-IP:
+
+```bash
+tmsh list auth user admin
+```
+
+| Output | Meaning |
+|---|---|
+| `partition-access { all-partitions { role admin } }` | Not this. Back to navigation |
+| `partition-access { Common { role admin } }` | **This is it** — `admin` cannot see `Tenant_1` in the GUI |
+
+The reason `tmsh` disagrees with the GUI is that you run `tmsh` over SSH as root, which does not
+honour partition access. TMUI does. So the CLI listing the objects happily while the GUI shows
+nothing is exactly the expected signature of this fault, not evidence against it.
+
+**Fix it immediately on both devices:**
+
+```bash
+tmsh modify auth user admin partition-access replace-all-with { all-partitions { role admin } }
+tmsh save sys config
+```
+
+Then log out of the GUI and back in — partition access is evaluated at login.
+
+**Fix it permanently** by declaring it, so a rebuild does not undo the change. In both
+`runtime-init-conf-3nic-payg-instance0{1,2}-airgap.yaml`, add `partitionAccess` to the admin
+user in the DO declaration:
+
+```yaml
+admin:
+  class: User
+  userType: regular
+  password: "{{{BIGIP_PASSWORD}}}"
+  shell: bash
+  partitionAccess:
+    all-partitions:
+      role: admin
+```
+
+> **Verify that property against your DO version before deploying it.** Declarative Onboarding
+> rejects an unrecognised property outright, so an unsupported spelling fails onboarding rather
+> than being ignored — a whole build cycle to discover. The `tmsh modify` above has no such risk
+> and can be applied to a running pair at any time.
+
+**Which releases are affected** is not fully established. It was observed on **17.5.1.6**, and
+the same symptom has been reported on unrelated CIS + AS3 deployments, which points at the
+behaviour rather than at one build. The default image is now 17.5.1.9-0.0.12; **whether that
+release carries the fix is unconfirmed**, so run the `tmsh list auth user admin` check on your
+first build either way.
 
 ### `SessionManagerPlugin is not found`
 
