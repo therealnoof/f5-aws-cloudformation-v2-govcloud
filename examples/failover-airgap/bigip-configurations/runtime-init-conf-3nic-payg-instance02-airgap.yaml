@@ -24,15 +24,15 @@ extension_packages:
   install_operations:
     - extensionType: do
       extensionVersion: 1.47.0
-      extensionUrl: https://f5-cft-gov.s3.us-gov-east-1.amazonaws.com/f5-aws-cloudformation-v2/v3.6.0.0/examples/bigip-extensions/f5-declarative-onboarding-1.47.0-14.noarch.rpm
+      extensionUrl: "{{{ARTIFACT_BASE_URL}}}bigip-extensions/f5-declarative-onboarding-1.47.0-14.noarch.rpm"
       extensionHash: 2338ce270d5ee12405e59d4f712b09cd111b24b5f78aee41e90f8e61ee2a36e2
     - extensionType: as3
       extensionVersion: 3.56.0
-      extensionUrl: https://f5-cft-gov.s3.us-gov-east-1.amazonaws.com/f5-aws-cloudformation-v2/v3.6.0.0/examples/bigip-extensions/f5-appsvcs-3.56.0-10.noarch.rpm
+      extensionUrl: "{{{ARTIFACT_BASE_URL}}}bigip-extensions/f5-appsvcs-3.56.0-10.noarch.rpm"
       extensionHash: 69a9779a724edb9705ec22eb466f39a34d8facbc2f92336ce4ec088296d3530d
     - extensionType: cf
       extensionVersion: 2.4.0
-      extensionUrl: https://f5-cft-gov.s3.us-gov-east-1.amazonaws.com/f5-aws-cloudformation-v2/v3.6.0.0/examples/bigip-extensions/f5-cloud-failover-2.4.0-0.noarch.rpm
+      extensionUrl: "{{{ARTIFACT_BASE_URL}}}bigip-extensions/f5-cloud-failover-2.4.0-0.noarch.rpm"
       extensionHash: 7f69fb8cfab1003c1a5a0348b9e65bb8d344784c0eb8a73d967a2283b9275eee
 extension_services:
   service_operations:
@@ -195,7 +195,7 @@ extension_services:
               xForwardedFor: true
             Custom_WAF_Policy:
               class: WAF_Policy
-              url: https://f5-cft-gov.s3.us-gov-east-1.amazonaws.com/f5-aws-cloudformation-v2/v3.6.0.0/examples/autoscale/bigip-configurations/Rapid_Deployment_Policy_13_1.xml
+              url: "{{{ARTIFACT_BASE_URL}}}autoscale/bigip-configurations/Rapid_Deployment_Policy_13_1.xml"
               enforcementMode: blocking
               ignoreChanges: false
             Demo_Responder:
@@ -434,6 +434,16 @@ runtime_parameters:
     tagProvider:
       environment: aws
       key: externalVipCidr
+  # Base URL of the staging bucket prefix, with a trailing slash. Set by the parent template
+  # from s3BucketName / s3BucketRegion / artifactLocation and written to the instance as the
+  # artifactBaseUrl tag, so the extension RPM URLs and the WAF policy URL below follow whatever
+  # bucket the operator actually deployed from. Hard-coding a bucket name here would send every
+  # customer's BIG-IPs to a bucket they do not own - in an air gap, a timeout with no explanation.
+  - name: ARTIFACT_BASE_URL
+    type: tag
+    tagProvider:
+      environment: aws
+      key: artifactBaseUrl
   - name: OWN_SELF_IP_EXTERNAL
     type: tag
     tagProvider:

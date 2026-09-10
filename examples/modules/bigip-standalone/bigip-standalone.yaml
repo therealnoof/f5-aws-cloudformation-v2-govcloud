@@ -548,6 +548,15 @@ Parameters:
       routed to the active BIG-IP for route-based VIP failover. Exposed to runtime-init
       as the externalVipCidr instance tag. Leave empty when not using route-based failover.
     Type: String
+  artifactBaseUrl:
+    Default: ''
+    Description: 'OPTIONAL - base URL of the staging bucket prefix, with a trailing slash, e.g.
+      https://my-bucket.s3.us-gov-east-1.amazonaws.com/f5-aws-cloudformation-v2/v3.6.0.0/examples/
+      Exposed to runtime-init as the artifactBaseUrl instance tag so a runtime-init config can
+      build its extensionUrl values from it instead of hard-coding a bucket name. Leave empty
+      when the runtime-init config carries absolute URLs, which is the case for every example
+      other than failover-airgap.'
+    Type: String
   externalSubnetId:
     Default: ''
     Description: 'The resource ID of the external subnet. ***Note:*** Subnet ID parameters
@@ -1258,6 +1267,8 @@ Resources:
           Value: !Ref 'externalVipAddress'
         - Key: externalVipCidr
           Value: !Ref 'externalVipCidr'
+        - Key: artifactBaseUrl
+          Value: !Ref 'artifactBaseUrl'
         - Key: externalSelfIp
           Value: !Ref 'externalSelfIp'
         - Key: peerExternalSelfIp
@@ -1530,6 +1541,8 @@ Resources:
           Value: !Ref 'externalVipAddress'
         - Key: externalVipCidr
           Value: !Ref 'externalVipCidr'
+        - Key: artifactBaseUrl
+          Value: !Ref 'artifactBaseUrl'
         - Key: externalSelfIp
           Value: !Ref 'externalSelfIp'
         - Key: peerExternalSelfIp
@@ -1796,6 +1809,8 @@ Resources:
           Value: !Ref 'externalVipAddress'
         - Key: externalVipCidr
           Value: !Ref 'externalVipCidr'
+        - Key: artifactBaseUrl
+          Value: !Ref 'artifactBaseUrl'
         - Key: externalSelfIp
           Value: !Ref 'externalSelfIp'
         - Key: peerExternalSelfIp

@@ -819,6 +819,10 @@ Resources:
         externalServicePublicIpIds: ''
         externalVipAddress: !Ref 'externalVipAddress'
         externalVipCidr: !Ref 'externalVipCidr'
+        artifactBaseUrl: !Sub
+          - 'https://${S3Bucket}.s3.${S3Region}.amazonaws.com/${artifactLocation}'
+          - S3Region: !Ref 's3BucketRegion'
+            S3Bucket: !Ref 's3BucketName'
         externalSecurityGroupId: !GetAtt [Dag, Outputs.bigIpExternalSecurityGroup]
         externalSelfIp: !Ref 'bigIpExternalSelfIp01'
         externalServiceIps: ''
@@ -931,6 +935,10 @@ Resources:
         externalServicePublicIpIds: ''
         externalVipAddress: !Ref 'externalVipAddress'
         externalVipCidr: !Ref 'externalVipCidr'
+        artifactBaseUrl: !Sub
+          - 'https://${S3Bucket}.s3.${S3Region}.amazonaws.com/${artifactLocation}'
+          - S3Region: !Ref 's3BucketRegion'
+            S3Bucket: !Ref 's3BucketName'
         externalSecurityGroupId: !GetAtt [Dag, Outputs.bigIpExternalSecurityGroup]
         externalSelfIp: !Ref 'bigIpExternalSelfIp02'
         externalServiceIps: ''
