@@ -15,6 +15,11 @@ if you are deploying that instead, or want more background on GovCloud generally
 > 3-NIC PAYG BIG-IP 17.5.1.6 pair. VIP failover was verified in **both** directions across
 > several runs and converged in **6-10 seconds**. Quote **10 seconds** to a customer for
 > headroom. See [section 8](#8-testing-failover) for the method and the raw numbers.
+> **Note the image change.** The default is now **BIG-IP 21.1.0.2-0.0.22**. It was moved off
+> 17.5.1.6 because a defect in that release scopes the admin user to the `Common` partition:
+> `tmsh` lists the AS3-created application objects normally, but the GUI shows nothing under
+> `Tenant_1`. **The validation above was performed on 17.5.1.6 — 21.1.0.2 has not yet been
+> through it.**
 
 ---
 
@@ -632,13 +637,13 @@ availability differs by Region:
 
 ```bash
 aws ec2 describe-images --region "$REGION" --owners aws-marketplace \
-  --filters "Name=name,Values=*17.5.1.6-0.0.25*PAYG-Best Plus 25Mbps*" \
+  --filters "Name=name,Values=*21.1.0.2-0.0.22*PAYG-Best Plus 25Mbps*" \
   --query 'reverse(sort_by(Images,&CreationDate))[].[Name,ImageId,CreationDate]' --output table
 ```
 
 An empty result means the pinned default is not in your Region — find one that is, and set
 `bigIpImage` to a pattern pinned to that version and build with the trailing timestamp
-wildcarded, e.g. `*17.5.1.6-0.0.25*PAYG-Best Plus 25Mbps*`.
+wildcarded, e.g. `*21.1.0.2-0.0.22*PAYG-Best Plus 25Mbps*`.
 
 > ⚠️ **Use a "Best" image.** The onboarding declaration provisions ASM and the AS3
 > declaration attaches a WAF policy. ASM exists only in the **Best** bundle — a "Good" or

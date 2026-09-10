@@ -37,6 +37,11 @@ make is served by a VPC endpoint.
 > deployment walkthrough with architecture diagrams, Session Manager and GUI access, a
 > validation checklist and troubleshooting. This README is the parameter and output
 > reference.
+> **Note the image change.** The default is now **BIG-IP 21.1.0.2-0.0.22**. It was moved off
+> 17.5.1.6 because a defect in that release scopes the admin user to the `Common` partition:
+> `tmsh` lists the AS3-created application objects normally, but the GUI shows nothing under
+> `Tenant_1`. **The validation above was performed on 17.5.1.6 — 21.1.0.2 has not yet been
+> through it.**
 
 ## What is different from `examples/failover`
 

@@ -11,6 +11,7 @@ duplication, and this file is what keeps the two from drifting.
 |---|---|
 | **Validated** | 2026-09-08 and again 2026-09-10 (first clean build with every fix active at once), `us-gov-east-1` |
 | **Build** | 3-NIC PAYG, BIG-IP 17.5.1.6-0.0.25, DO 1.47.0, AS3 3.56.0, CFE 2.4.0 |
+| **Default image now** | BIG-IP 21.1.0.2-0.0.22 - changed after validation, see note below. Re-validation pending |
 | **Result** | Deployed end to end; VIP failover verified in **both** directions |
 | **Convergence** | 6-10 s each way (in-VPC client, 0.5 s poll, last-good to first-good; runs: 9.58 s / ~6 s / 9.58 s) |
 | **Defects found and fixed** | (1) Masked next-hop address broke failover in one direction - see "Rules that are easy to break" below. (2) `cfeS3Bucket` was never passed to `BigIpInstance02`, so its CFE could not reach the state store during onboarding - an upstream bug, also fixed in `examples/failover/failover.yaml`. (3) NAT gateways and two Elastic IPs were created in what was documented as a no-public-IP design, giving the private subnets internet egress - now `provisionNatGateways='false'`, with NTP moved to link-local. (4) `/LOCAL_ONLY` was assigned to the sync device group on the owner device, syncing a per-AZ default route to a peer that rejected it and leaving the cluster permanently `Sync Failed`. |
@@ -25,6 +26,28 @@ fixed reaching it - see "Vendor installers" below for both.
 Note that on a clean build `/LOCAL_ONLY` reports `device-group none` with `traffic-group none`;
 only `device-group` matters. The self-heal sets `traffic-group-local-only` when it has to
 correct the folder, so either value is healthy.
+
+**Image version changed 2026-09-10, after the validation above.** `bigIpImage` now defaults to
+`*21.1.0.2-0.0.22*PAYG-Best Plus 25Mbps*`. BIG-IP 17.5.1.6 carries a defect that scopes the
+admin user created by Declarative Onboarding to the `Common` partition: `tmsh` lists the
+AS3-created objects normally, but the GUI shows nothing under `Tenant_1`, because TMUI honours
+partition access while a root shell does not. Adding `partitionAccess: all-partitions` to the
+DO declaration works around it; moving off the affected release is the cleaner answer for
+something customers deploy.
+
+**Everything above was validated on 17.5.1.6. 21.1.0.2 has not been.** It is a major-version
+jump, so re-run the full checklist and both failover directions before treating it as proven,
+and check three things specifically:
+
+- **Extension compatibility.** DO 1.47.0, AS3 3.56.0 and CFE 2.4.0 are pinned by version and
+  `extensionHash` in the runtime-init configs. If any of them does not support 21.1, onboarding
+  fails at the install step and the hash must be updated along with the version.
+- **The clustering self-heal.** `cluster-heal.sh` exists to work around a 17.x device-trust
+  startup bug. On 21.1 it may be unnecessary, or it may behave differently - it is idempotent
+  and should be harmless either way, but confirm the cluster reaches `In Sync` without it
+  having to intervene repeatedly.
+- **The GUI symptom is gone.** That is the reason for the change, so check it directly: log in
+  and confirm the AS3 objects under `Tenant_1` are visible.
 
 Re-run the [validation checklist](AIRGAP-GUIDE.md#6-validating-the-deployment) and both
 failover directions after any change to the CFE declaration, the network module's route
