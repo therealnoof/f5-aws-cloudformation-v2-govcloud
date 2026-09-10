@@ -1662,8 +1662,19 @@ Check the folder, not the route:
 tmsh list sys folder /LOCAL_ONLY
 ```
 
-You want `device-group none` and `traffic-group traffic-group-local-only`. If it shows
-`device-group failoverGroup`, that is the fault. Fix it on the affected device:
+**`device-group none` is the whole test.** That is what keeps the folder out of config-sync;
+if it shows `device-group failoverGroup`, that is the fault.
+
+The `traffic-group` line is *not* part of the test, and two different healthy values are
+normal:
+
+| Output | Meaning |
+|---|---|
+| `device-group none` / `traffic-group none` | A clean build. Declarative Onboarding created the folder correctly and the self-heal had nothing to correct |
+| `device-group none` / `traffic-group traffic-group-local-only` | The self-heal corrected the folder; it sets the traffic group explicitly at the same time |
+| `device-group failoverGroup` | **The fault** — whatever the traffic group says |
+
+Fix it on the affected device:
 
 ```bash
 tmsh modify sys folder /LOCAL_ONLY device-group none traffic-group traffic-group-local-only
