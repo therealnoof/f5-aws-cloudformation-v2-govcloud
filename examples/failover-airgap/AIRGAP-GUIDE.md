@@ -1127,7 +1127,7 @@ Retrieve the password with:
 
 ```bash
 aws secretsmanager get-secret-value --region "$REGION" \
-  --secret-id <your-secret-arn> --query SecretString --output text
+  --secret-id '<your-secret-arn>' --query SecretString --output text
 ```
 
 **For the second BIG-IP**, use the `ssmPortForwardBigIp02` output, which forwards to
@@ -1197,7 +1197,7 @@ If those exist, the deployment is fine and you are looking at a navigation probl
 listing is genuinely empty, check whether AS3 deployed at all:
 
 ```bash
-curl -su admin:<password> http://localhost:8100/mgmt/shared/appsvcs/declare | python3 -m json.tool | head -40
+curl -su 'admin:<password>' http://localhost:8100/mgmt/shared/appsvcs/declare | python3 -m json.tool | head -40
 ```
 
 > ⚠️ **Treat AS3 objects as read-only in the GUI.** AS3 owns everything under `Tenant_1`.
@@ -1236,7 +1236,7 @@ it with:
 
 ```bash
 aws secretsmanager get-secret-value --region "$REGION" \
-  --secret-id <your-secret-arn> --query SecretString --output text
+  --secret-id '<your-secret-arn>' --query SecretString --output text
 ```
 
 > **If you left `bigIpSecretArn` blank**, the stack created the secret for you and publishes
@@ -1743,68 +1743,249 @@ configuration is already synchronised and this is housekeeping.
 
 ## 10. Tearing the stack down
 
-Cloud Failover Extension creates an S3 bucket for its failover state, and **CloudFormation
-cannot delete a bucket that still has objects in it**. Empty it first or the stack delete
-fails partway and leaves resources behind:
+Deleting this stack is not quite a one-liner, because of one resource CloudFormation cannot
+remove on its own. Work through 10.1 to 10.4 in order.
+
+### 10.1 Set your variables again
+
+🖥️ WORKSTATION. If you opened a new terminal since section 4, the variables you set in
+section 4.1 are gone — shell variables do not survive closing the window. Set them again, and
+**do not skip `REGION`**: almost every command below is Region-scoped, and without it the CLI
+falls back to your default Region, which in a GovCloud account is very often a commercial one.
+A command pointed at the wrong Region does not error helpfully — it reports that nothing
+exists, which reads exactly like a successful cleanup:
 
 ```bash
-STACK=<your-stack-name>
+REGION=us-gov-east-1          # the Region the stack was built in
+STACK=failover-airgap         # the stack name you used in section 4.8
 
-CFEB=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+echo "REGION=$REGION  STACK=$STACK"
+```
+
+Confirm the stack is really there and finished building before you touch anything:
+
+```bash
+aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+  --query 'Stacks[0].[StackName,StackStatus,CreationTime]' --output table
+```
+
+> **Do not run this procedure against a stack that is still building.** Step 10.2 empties a
+> bucket that a running BIG-IP is actively writing to. If you need to abandon a build in
+> progress, skip straight to the plain `delete-stack` in 10.3 and let CloudFormation remove
+> the bucket along with everything else — while the instances are still alive, the bucket
+> normally still has objects in it, so that delete may fail and need 10.2 afterwards. That is
+> fine; it is the emptying-while-live that you want to avoid.
+
+### 10.2 Empty the CFE state bucket first
+
+Cloud Failover Extension creates its own S3 bucket to hold failover state, and
+**CloudFormation cannot delete a bucket that still has objects in it.** If you skip this, the
+stack delete runs for several minutes, fails on that one resource, and leaves a
+half-deleted stack behind — which is more work to clean up than doing this first.
+
+🖥️ WORKSTATION — find the bucket. Do this **before** deleting the stack, because
+`describe-stacks` stops working the moment the stack is gone:
+
+```bash
+CFEB=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
   --query "Stacks[0].Outputs[?OutputKey=='cfeS3Bucket'].OutputValue" --output text)
 echo "CFE state bucket: $CFEB"
+```
 
+You should see a name ending in `-bigip-high-availability-solution` — the stack builds it as
+`<uniqueString>-bigip-high-availability-solution`, so with the default `uniqueString=myuniqstr`
+it is `myuniqstr-bigip-high-availability-solution`.
+
+> **If that comes back empty or as `None`**, the stack is already partly deleted or the name
+> or Region is wrong. Find the bucket by its name instead — it is the only one shaped like
+> this:
+>
+> ```bash
+> aws s3 ls | grep bigip-high-availability-solution
+> ```
+
+**Now check what you are about to delete, before you delete it.** This guard compares the CFE
+bucket against your staging bucket and refuses if they are the same. Paste it as one block:
+
+```bash
+BUCKET=f5-cft-gov     # your STAGING bucket from section 4.4 — the templates and RPMs
+
+if [ -z "$CFEB" ] || [ "$CFEB" = "None" ]; then
+  echo "STOP: CFEB is empty — do not run the delete. Re-check STACK and REGION."
+elif [ "$CFEB" = "$BUCKET" ]; then
+  echo "STOP: that is your STAGING bucket, not CFE's state bucket. Do not delete it."
+else
+  echo "OK to empty: $CFEB"
+  aws s3 ls "s3://$CFEB" --recursive --summarize | tail -5
+fi
+```
+
+Only when that prints `OK to empty:` and a short listing, empty it:
+
+```bash
 aws s3 rm "s3://$CFEB" --recursive
-aws cloudformation delete-stack --stack-name "$STACK"
-aws cloudformation wait stack-delete-complete --stack-name "$STACK" && echo deleted
 ```
 
-> ⚠️ `$CFEB` is CFE's **state** bucket, created by the stack. It is not your staging bucket
-> of templates and artifacts — do not delete that one.
+> ⚠️ **`$CFEB` is CFE's state bucket, created and owned by this stack.** It is *not* the
+> staging bucket of templates and artifacts you built in section 4.4. Deleting that one means
+> re-uploading everything, including the RPMs and installer you had to fetch from the
+> internet. They are easy to confuse because both are S3 buckets that this guide talks about.
 
-**Never run this against a stack that is still building.** Deleting the CFE state bucket of
-a live stack removes the file the extension is actively using. If you need to abandon a
-build in progress, delete the stack and let CloudFormation remove the bucket with it.
+> The CFE bucket is created without versioning, so `rm --recursive` genuinely empties it —
+> there are no hidden object versions left behind to block the delete. (On a versioned bucket
+> it would not be enough, which is a common reason this step appears to have worked and the
+> stack delete fails anyway.)
 
-**Then confirm nothing billable survived.** A delete that fails partway can strand NAT
-gateways and Elastic IPs, both of which bill by the hour:
+### 10.3 Delete the stack
+
+🖥️ WORKSTATION:
 
 ```bash
-aws ec2 describe-nat-gateways --filter "Name=state,Values=available,pending" \
+aws cloudformation delete-stack --region "$REGION" --stack-name "$STACK"
+```
+
+That command returns **immediately and silently** — it only queues the delete. To wait for it:
+
+```bash
+aws cloudformation wait stack-delete-complete --region "$REGION" --stack-name "$STACK" \
+  && echo "deleted"
+```
+
+**Expect several minutes with no output at all.** The waiter prints nothing while it polls.
+Teardown is not instant: the nested stacks come down one at a time in dependency order
+— seven of them with this guide's defaults, which skip the bastion and the example app —
+and network interfaces in particular detach slowly.
+
+> **Two confusing outcomes, both normal:**
+>
+> - **The waiter eventually gives up** with `Waiter StackDeleteComplete failed: Max attempts
+>   exceeded`. That is the *waiter* timing out, not the delete failing. Check the real status
+>   with the command below.
+> - **Checking status on a fully deleted stack is an error.** Once it is genuinely gone,
+>   `describe-stacks` replies `Stack with id failover-airgap does not exist`. That error **is**
+>   the success signal. Nothing is wrong.
+>
+> ```bash
+> aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+>   --query 'Stacks[0].StackStatus' --output text
+> ```
+
+### 10.4 Confirm nothing billable survived
+
+A delete that fails partway can strand resources that bill by the hour. Check for them
+🖥️ WORKSTATION:
+
+```bash
+aws ec2 describe-instances --region "$REGION" \
+  --filters "Name=instance-state-name,Values=running,stopped" \
+  --query 'Reservations[].Instances[].[InstanceId,InstanceType,State.Name,Tags[?Key==`Name`]|[0].Value]' \
+  --output table
+
+aws ec2 describe-nat-gateways --region "$REGION" \
+  --filter "Name=state,Values=available,pending" \
   --query 'NatGateways[].[NatGatewayId,VpcId,State]' --output table
-aws ec2 describe-addresses --query 'Addresses[].[PublicIp,AllocationId,AssociationId]' --output table
-aws ec2 describe-instances --filters "Name=instance-state-name,Values=running" \
-  --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`]|[0].Value]' --output table
+
+aws ec2 describe-addresses --region "$REGION" \
+  --query 'Addresses[].[PublicIp,AllocationId,AssociationId]' --output table
 ```
 
-All three should be empty for this stack. A current air-gap deployment creates no NAT
-gateways or Elastic IPs at all, so any that appear are either from another stack or from an
-older deployment built before that change.
+**How to read that.** These are account-wide, not stack-scoped, so do not panic at the first
+row you see — it may belong to a colleague or another project. What matters:
 
-**If the delete fails**, find the blocking resource rather than retrying blindly:
+- **A current air-gap deployment creates no NAT gateways and no Elastic IPs at all**
+  (`provisionNatGateways` is hard-set to `false`, and removing EIPs is the entire point of this
+  design). So anything in those two tables is from something else — another stack, or an
+  older deployment built before that change. Confirm before deleting.
+- In the instance table, look for `failover01` / `failover02` and the `*-ssm-jump` host. A
+  stopped BIG-IP still bills for its EBS volume, so a stopped instance is not a free one.
+
+**The one check that is genuinely stack-scoped** is whether any piece of the stack is stuck in
+`DELETE_FAILED`. This covers the nested stacks too, which is what you usually need:
 
 ```bash
-aws cloudformation describe-stack-events --stack-name "$STACK" \
+aws cloudformation list-stacks --region "$REGION" --stack-status-filter DELETE_FAILED \
+  --query "StackSummaries[?contains(StackName, '$STACK')].[StackName,StackStatus]" --output table
+```
+
+Empty output here means the teardown was clean.
+
+### 10.5 If the delete fails
+
+Find the blocking resource rather than retrying blindly:
+
+```bash
+aws cloudformation describe-stack-events --region "$REGION" --stack-name "$STACK" \
   --query 'StackEvents[?ResourceStatus==`DELETE_FAILED`].[LogicalResourceId,ResourceType,ResourceStatusReason]' \
   --output table
 ```
 
-The usual causes are the CFE bucket having been repopulated (empty it again — the instances
-are gone by then, so nothing will rewrite it) or an interface still detaching, which
-generally clears on a retry a few minutes later. As a last resort you can abandon a specific
-resource, but anything retained stays in your account and must be deleted by hand:
+> **If that only tells you a nested stack failed**, you are looking one level too high. The
+> parent reports something like `Embedded stack ... was not successfully deleted`, and the
+> actual reason lives in the **nested** stack's events. Take the failing nested stack's name
+> from the `list-stacks` command in 10.4 — it looks like `failover-airgap-BigIpInstance01-ABC123`
+> — and run the same `describe-stack-events` against **that** name.
+
+The two usual causes:
+
+| Reason | What to do |
+|---|---|
+| The CFE bucket is not empty | Empty it again and re-run the delete. By this point the instances are gone, so nothing will rewrite it. |
+| A network interface is still detaching | Wait a few minutes and re-run `delete-stack`. This one clears on its own far more often than not. |
+
+Re-running `delete-stack` on a `DELETE_FAILED` stack is safe and is the normal fix — it
+retries only what is left.
+
+As a genuine last resort you can abandon a specific resource:
 
 ```bash
-aws cloudformation delete-stack --stack-name "$STACK" --retain-resources <LogicalResourceId>
+aws cloudformation delete-stack --region "$REGION" --stack-name "$STACK" \
+  --retain-resources '<LogicalResourceId>'
 ```
 
-**What survives deliberately.** The admin secret and the SSH key pair are not stack
-resources when you supply them yourself, so they persist for the next deployment. If you
-let the stack generate the secret, it is deleted with the stack but held under Secrets
-Manager's recovery window (30 days by default), so repeated deploy/destroy cycles
-accumulate `*-bigIpSecret-*` entries with identical name prefixes. Creating one secret
-yourself and passing `bigIpSecretArn` avoids both the clutter and a new random password on
-every build.
+> **`--retain-resources` only works on a stack already in `DELETE_FAILED`** — on a healthy
+> stack the command is rejected. And anything you retain stays in your account, still billing,
+> and must then be deleted by hand. Use it to get unstuck, then go delete the retained
+> resource yourself.
+
+### 10.6 What survives on purpose, and what to keep
+
+Some things deliberately outlive the stack:
+
+| Thing | Why it survives | Keep it? |
+|---|---|---|
+| The **staging bucket** (section 4.4) | You created it, not the stack | **Keep it.** It makes the next deploy a single `s3 sync`. |
+| The local **`artifacts/`** folder | Downloaded by hand, never in the repo | **Keep it.** It is the only part of the build that needs internet access. |
+| The **admin secret** (`bigIpSecretArn`) | Not a stack resource when you supply it | Keep it — reusing it keeps the password stable across rebuilds. |
+| The **SSH key pair** | Not a stack resource when you supply it | Keep it. |
+
+**The one that quietly piles up.** If you let the stack *generate* the secret rather than
+passing `bigIpSecretArn`, it is deleted with the stack — but Secrets Manager holds deleted
+secrets for a recovery window (30 days by default) rather than removing them. Repeated
+deploy/destroy cycles therefore accumulate `*-bigIpSecret-*` entries that still occupy their
+names. List them:
+
+```bash
+aws secretsmanager list-secrets --region "$REGION" --include-planned-deletion \
+  --query "SecretList[?contains(Name, 'bigIpSecret')].[Name,DeletedDate]" --output table
+```
+
+To remove one immediately rather than waiting out the window:
+
+```bash
+aws secretsmanager delete-secret --region "$REGION" \
+  --secret-id '<name-or-arn-from-the-list-above>' --force-delete-without-recovery
+```
+
+> ⚠️ `--force-delete-without-recovery` is **irreversible** — there is no undo and no recovery
+> window. Run the `list-secrets` command first and delete by exact name, one at a time. Never
+> point it at a secret you did not create for this lab.
+
+Creating one secret yourself and passing `bigIpSecretArn` avoids this entirely, and is why
+section 4.2 recommends it.
+
+> **Open Session Manager tunnels.** If you still have a port-forward running in another
+> terminal from section 5 or 7, it dies with the jump host. Press `Ctrl-C` in that window to
+> close it cleanly rather than leaving a dead session behind.
 
 ---
 
@@ -1874,15 +2055,15 @@ onboarding never ran.
 
 ```bash
 # what CFE believes it manages
-curl -su admin:<password> http://localhost:8100/mgmt/shared/cloud-failover/inspect \
+curl -su 'admin:<password>' http://localhost:8100/mgmt/shared/cloud-failover/inspect \
   | python3 -m json.tool
 
 # the live declaration, including the next-hop list
-curl -su admin:<password> -X POST http://localhost:8100/mgmt/shared/cloud-failover/declare \
+curl -su 'admin:<password>' -X POST http://localhost:8100/mgmt/shared/cloud-failover/declare \
   -d '{"action":"discover"}' | python3 -m json.tool
 
 # version and status
-curl -su admin:<password> http://localhost:8100/mgmt/shared/cloud-failover/info
+curl -su 'admin:<password>' http://localhost:8100/mgmt/shared/cloud-failover/info
 ```
 
 In the declaration, check `defaultNextHopAddresses.items`:
@@ -2020,13 +2201,13 @@ TLS, and logged in CloudTrail. Clear the stale entry and reconnect:
 
 ```bash
 ssh-keygen -R '[localhost]:2222'
-ssh -i ~/.ssh/<your-key>.pem -p 2222 admin@localhost
+ssh -i "$HOME/.ssh/<your-key>.pem" -p 2222 admin@localhost
 ```
 
 If you rebuild often, keep the tunnel's host keys out of your real `known_hosts` entirely:
 
 ```bash
-ssh -i ~/.ssh/<your-key>.pem -p 2222 \
+ssh -i "$HOME/.ssh/<your-key>.pem" -p 2222 \
   -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no admin@localhost
 ```
 
@@ -2067,7 +2248,7 @@ aws ssm start-session --region "$REGION" --target "$JUMP" \
   --parameters '{"host":["10.0.1.11"],"portNumber":["22"],"localPortNumber":["2222"]}'
 
 # terminal 2
-ssh -i ~/.ssh/<your-key>.pem -p 2222 admin@localhost
+ssh -i "$HOME/.ssh/<your-key>.pem" -p 2222 admin@localhost
 ```
 
 Then use the `hostname` test from the first entry in this section to tell "still working" from
