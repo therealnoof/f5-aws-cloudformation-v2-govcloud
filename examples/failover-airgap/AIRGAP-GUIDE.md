@@ -143,7 +143,7 @@ reachable without one:
 | Piece | What it is | Why it is here |
 |---|---|---|
 | **BIG-IP pair** | Two VEs, 3 NICs each (management, external, internal), clustered active/standby | The HA pair serving your application |
-| **Application VIP** `10.99.0.100` | An address **outside the VPC CIDR** | It belongs to no subnet, so it can be routed to either AZ — this is the whole trick |
+| **Application VIP** `10.99.0.100` | An **alien IP** — an address deliberately **outside the VPC CIDR** | It belongs to no subnet, so it can be routed to either AZ — this is the whole trick |
 | **Route tables** | Three, each with a route for `10.99.0.0/24` and tagged `f5_cloud_failover_label` | How clients reach the VIP, and what moves on failover |
 | **Cloud Failover Extension (CFE)** | An F5 extension running on each BIG-IP | On failover it calls `ec2:ReplaceRoute` to re-point those routes |
 | **Declarative Onboarding (DO)** | F5 extension | Builds the cluster, VLANs and Self IPs at first boot |
@@ -177,9 +177,22 @@ and **the VIP silently never moves**. That is the problem this template solves.
 
 ### What this template does instead
 
-The VIP is an address outside the VPC CIDR, so AWS has no implicit route for it. The
-template creates one in every route table, pointing at the active BIG-IP's external
-interface. On failover, CFE re-points them.
+The VIP is an **alien IP** — F5's term, also used in AWS material, for an address that is
+deliberately chosen *outside* the VPC CIDR so it belongs to no subnet and is nobody's ENI
+address. AWS therefore has no implicit route for it. The template creates one in every route
+table, pointing at the active BIG-IP's external interface, and on failover CFE re-points them.
+
+> **Why "alien" is the useful word here.** Because the address is foreign to every subnet,
+> nothing has to *move* it — no ENI reassignment, no Elastic IP association, no secondary
+> private IP that cannot cross an Availability Zone boundary. Only a route changes. Everything
+> else in this design follows from that one property, including the two things that surprise
+> people: source/destination checking must be **disabled** on the external ENIs (an alien IP is
+> never one of the ENI's own addresses, so AWS would otherwise discard the packet before the
+> BIG-IP sees it), and the whole alien prefix fails over together rather than one VIP at a time.
+
+In this guide, the parameters that define it are `externalVipCidr` (the **alien prefix**) and
+`externalVipAddress` (the **alien VIP** inside it). The names are historical; the concept is the
+alien IP.
 
 ```mermaid
 sequenceDiagram
@@ -344,10 +357,11 @@ session-manager-plugin
   you are fine. In a fully disconnected enclave with no AWS API access at all, Session
   Manager cannot help and you would need private connectivity (Direct Connect/VPN) instead.
 
-### 3.3 Choosing your VIP prefix
+### 3.3 Choosing your alien prefix
 
-`externalVipCidr` (default `10.99.0.0/24`) and `externalVipAddress` (default
-`10.99.0.100`) need thought before you deploy:
+This is the **alien IP** range — see [section 2](#what-this-template-does-instead) if the term
+is new. `externalVipCidr` (default `10.99.0.0/24`) is the alien prefix and `externalVipAddress`
+(default `10.99.0.100`) is the alien VIP inside it. Both need thought before you deploy:
 
 - The prefix **must not overlap** the VPC CIDR, any peered VPC, or any on-premises range
   reachable over Direct Connect, VPN or Transit Gateway. It is routed *inside* this VPC,
@@ -1473,12 +1487,13 @@ return to `In Sync` without intervention.
 The single most common question once a customer is past the example application: **where do our
 real VIPs go, and do they have to be AS3?**
 
-**The unit of failover is the prefix, not the VIP.** The stack creates one route per route table
-for the whole of `externalVipCidr` — `10.99.0.0/24` by default — pointed at the active device's
-external interface, and CFE's `scopingAddressRanges` is that same prefix. CFE moves the *route*.
-It never looks at your virtual server list and has no per-VIP configuration.
+**The unit of failover is the alien prefix, not the individual VIP.** The stack creates one route
+per route table for the whole of `externalVipCidr` — `10.99.0.0/24` by default — pointed at the
+active device's external interface, and CFE's `scopingAddressRanges` is that same prefix.
+CFE moves the *route*. It never looks at your virtual server list and has no per-VIP
+configuration.
 
-**So every address inside `externalVipCidr` already fails over.** `10.99.0.100` is simply the one
+**So every alien IP inside `externalVipCidr` already fails over.** `10.99.0.100` is simply the one
 the example uses. `10.99.0.101` through `10.99.0.254` are already routed and already in scope.
 Adding a production VIP requires:
 

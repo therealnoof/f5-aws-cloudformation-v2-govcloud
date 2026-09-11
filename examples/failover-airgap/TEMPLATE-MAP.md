@@ -130,12 +130,13 @@ flowchart TD
 | 7 | runtime-init config | 229, 247 | Both virtual servers reference that service address |
 | 8 | runtime-init config | 154 | Prefix substituted into CFE `scopingAddressRanges` |
 
-**Why the address is outside the VPC CIDR.** `10.99.0.100` belongs to no subnet, so it is not an
+**Why the address is an alien IP.** F5 (and AWS) call an address chosen deliberately outside
+the VPC CIDR an *alien IP*. `10.99.0.100` belongs to no subnet, so it is not an
 ENI address and nothing has to move it between AZs. Only the *route* moves. That is the entire
 mechanism, and it is why this design needs no Elastic IP.
 
-**Why every VIP in the prefix works for free.** Steps 2 and 8 use the **prefix**, not the address.
-Any address inside `10.99.0.0/24` is already routed and already in CFE's scope — see the guide's
+**Why every VIP in the alien prefix works for free.** Steps 2 and 8 use the **prefix**, not
+the address. Any address inside `10.99.0.0/24` is already routed and already in CFE's scope — see the guide's
 "Adding production VIPs after the demo".
 
 **Check it on a live box:**

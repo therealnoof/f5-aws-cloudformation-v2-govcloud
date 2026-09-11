@@ -26,10 +26,11 @@ Availability Zones, clustered with Declarative Onboarding and failed over with t
 with **no public IP address on any BIG-IP resource** and an application VIP that fails
 over across AZs without an Elastic IP.
 
-The VIP is an address **outside the VPC CIDR**. Each route table carries a route for the
-VIP prefix that targets the active BIG-IP's external interface, and CFE retargets those
-routes (`failoverRoutes`) when the active device changes. Every AWS API call the BIG-IPs
-make is served by a VPC endpoint.
+The VIP is an **alien IP** - F5's term, also used in AWS material, for an address chosen
+deliberately **outside the VPC CIDR** so it belongs to no subnet and is nobody's ENI
+address. Each route table carries a route for the alien prefix that targets the active
+BIG-IP's external interface, and CFE retargets those routes (`failoverRoutes`) when the
+active device changes. Every AWS API call the BIG-IPs make is served by a VPC endpoint.
 
 > ### ✅ Status: lab-validated
 > Deployed and failover-tested end to end in `us-gov-east-1` on **2026-09-08** (3-NIC PAYG,
@@ -54,7 +55,7 @@ make is served by a VPC endpoint.
 | | `examples/failover` | `examples/failover-airgap` |
 |---|---|---|
 | Elastic IPs | Up to 5 (management, external Self IPs, VIP) **plus 2 for NAT gateways** | **None at all** |
-| Application VIP | Secondary private IP per AZ + one floating EIP | **One address outside the VPC CIDR** (`externalVipAddress`) |
+| Application VIP | Secondary private IP per AZ + one floating EIP | **One alien IP outside the VPC CIDR** (`externalVipAddress`) |
 | What CFE moves on failover | The EIP association (`failoverAddresses`) | **The target ENI of the VIP route** in every route table (`failoverRoutes`) |
 | Source/dest check on external ENIs | Enabled (AWS default) | **Disabled** (required for an alien-IP VIP) |
 | Route tables | Untagged | Tagged `f5_cloud_failover_label=cfeTag`, one VIP route each |
@@ -96,10 +97,10 @@ to get a working stack.
 
 Points specific to this solution:
 
-- **Choose the VIP prefix carefully.** `externalVipCidr` (default `10.99.0.0/24`) must not
+- **Choose the alien prefix carefully.** `externalVipCidr` (default `10.99.0.0/24`) must not
   overlap the VPC CIDR or anything reachable from the VPC - including on-premises ranges
   arriving over Direct Connect, VPN or Transit Gateway.
-- **Off-VPC clients need the prefix propagated.** The template routes the VIP prefix inside
+- **Off-VPC clients need the prefix propagated.** The template routes the alien prefix inside
   the VPC only. Clients on other networks need `externalVipCidr` routed into this VPC in
   *their* route tables (Transit Gateway route, VPN static route, and so on).
 - **For Session Manager access**, the operator's workstation needs the AWS CLI with the
@@ -117,8 +118,8 @@ The parameters are those of `failover.yaml` **minus** the public-IP toggles
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `externalVipAddress` | No | `10.99.0.100` | The application VIP. Must be outside the VPC CIDR and inside `externalVipCidr`. Bound to the AS3 virtual servers on both devices. |
-| `externalVipCidr` | No | `10.99.0.0/24` | Prefix routed to the active BIG-IP. One `AWS::EC2::Route` for exactly this prefix is created per route table, and the CFE declaration manages routes for exactly this prefix. |
+| `externalVipAddress` | No | `10.99.0.100` | The application VIP - the **alien IP**. Must be outside the VPC CIDR and inside `externalVipCidr`. Bound to the AS3 virtual servers on both devices. |
+| `externalVipCidr` | No | `10.99.0.0/24` | The **alien prefix** routed to the active BIG-IP. One `AWS::EC2::Route` for exactly this prefix is created per route table, and the CFE declaration manages routes for exactly this prefix. |
 | `provisionSsmAccess` | No | `true` | Deploy a private jump host managed by Systems Manager Session Manager (`modules/ssm-jump`) in the BIG-IP management subnet, plus the SSM interface endpoints. No public IP, no inbound rules, no SSH key. |
 | `ssmJumpInstanceType` | No | `t3.micro` | Instance type for the jump host. It only terminates SSM sessions and forwards ports, so the smallest type in the Region is normally enough. |
 | `ssmJumpCustomImageId` | No | `''` | AMI for the jump host, overriding the Amazon Linux 2023 lookup. Leave empty for the normal case. Set it if the AWS-published SSM parameter `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64` is not available in your Region, or if a hardened base image is required. Any image works provided the SSM Agent is installed and starts at boot. |
