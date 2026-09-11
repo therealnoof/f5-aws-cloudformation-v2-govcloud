@@ -10,6 +10,10 @@ Conditions:
     - !Equals
       - !Ref 'customImageId'
       - ''
+  useS3PrefixList: !Not
+    - !Equals
+      - !Ref 's3PrefixListId'
+      - ''
   useVipCidr: !Not
     - !Equals
       - !Ref 'vipCidr'
@@ -24,6 +28,7 @@ Metadata:
           - vpcCidr
           - subnetId
           - vipCidr
+          - s3PrefixListId
       - Label:
           default: Instance
         Parameters:
@@ -56,6 +61,8 @@ Metadata:
         default: SSM public parameter holding the Amazon Linux 2023 AMI ID
       owner:
         default: Owner
+      s3PrefixListId:
+        default: S3 prefix list the jump host may reach (for artifact verification)
       subnetId:
         default: Private subnet for the jump host
       uniqueString:
@@ -118,6 +125,22 @@ Parameters:
   owner:
     Default: f5owner
     Description: Owner Tag.
+    Type: String
+  s3PrefixListId:
+    AllowedPattern: '^$|^pl-[0-9a-f]+$'
+    ConstraintDescription: Must be empty or an AWS-managed prefix list ID (pl-xxxxxxxx).
+    Default: ''
+    Description: Optional ID of the AWS-managed prefix list for S3 in this Region
+      (com.amazonaws.<region>.s3), added as an egress rule on 443. A gateway VPC endpoint
+      routes S3 traffic to S3's own address ranges rather than to an address inside the
+      VPC, so egress to the VPC CIDR does not cover it and the jump host cannot reach the
+      bucket without this rule. With it, an operator can verify from inside the VPC that
+      the staging bucket is readable - the check that identifies the most common air-gap
+      failure, artifacts the BIG-IPs cannot fetch at boot. Traffic stays on the gateway
+      endpoint and never leaves the VPC. Find the ID with "aws ec2
+      describe-managed-prefix-lists --region <region> --filters
+      Name=prefix-list-name,Values=com.amazonaws.<region>.s3 --query
+      PrefixLists[0].PrefixListId --output text". Leave empty to disallow S3 egress.
     Type: String
   subnetId:
     Description: REQUIRED - A private subnet (no public IP on launch). The BIG-IP
@@ -186,7 +209,8 @@ Resources:
     Properties:
       VpcId: !Ref 'vpc'
       GroupDescription: SSM jump host - no inbound; outbound only to the VPC (SSM endpoints,
-        BIG-IP management) and optionally the application VIP prefix
+        BIG-IP management), optionally the S3 gateway endpoint prefix list, and optionally
+        the application VIP prefix
       GroupName: !Join
         - ''
         - - !Ref 'uniqueString'
@@ -202,6 +226,18 @@ Resources:
           ToPort: 22
           CidrIp: !Ref 'vpcCidr'
           Description: BIG-IP management SSH
+        # S3 reached through the GATEWAY endpoint, whose traffic is destined for S3's own
+        # address ranges - not for anything inside the VPC - so the vpcCidr rules above do
+        # not cover it. The prefix list is the only way to express "S3 in this Region" in
+        # a security group.
+        - !If
+          - useS3PrefixList
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            DestinationPrefixListId: !Ref 's3PrefixListId'
+            Description: S3 via the gateway VPC endpoint - staging bucket verification
+          - !Ref 'AWS::NoValue'
         - !If
           - useVipCidr
           - IpProtocol: tcp

@@ -110,7 +110,10 @@ diff examples/failover/failover.yaml examples/failover-airgap/failover-airgap.ya
   `bigIpExternalVip01`, `bigIpExternalVip02`, `cfeVipTag`. Their values are fixed: no
   public IPs anywhere, no secondary private IPs, VPC endpoints always on.
 - **Added parameters:** `externalVipAddress`, `externalVipCidr`, `provisionSsmAccess`,
-  `provisionBastion` (default `false` here), `ssmJumpInstanceType`, `ssmJumpCustomImageId`.
+  `provisionBastion` (default `false` here), `ssmJumpInstanceType`, `ssmJumpCustomImageId`,
+  `ssmJumpS3PrefixListId`, `bigIpRuntimeInitGpgKeyUrl`, `artifactBaseUrl` (passed to the
+  BIG-IP stacks, not a template parameter), `provisionCfeS3Bucket` (set `false` on
+  instance 02 only, so the two nested stacks do not both create the same bucket).
 - **Instances:** `disableSourceDestCheck='true'`, the three VIP/peer parameters, all EIP
   allocation IDs `''`, `numExternalPublicIpAddresses=0`, `numSecondaryPrivateIpAddresses=0`,
   default runtime-init config URLs point at this directory.
@@ -324,6 +327,31 @@ editing `cluster-heal.sh`, regenerate it in **both** directories.
   redeploys. Do not replace it with a post-deploy script.
 - **Shared-module parameters must keep defaults that preserve existing behaviour.** The
   EIP-based `failover.yaml` must deploy unchanged with the patched modules.
+
+### The jump host reaches S3 only when `ssmJumpS3PrefixListId` is set
+
+`modules/ssm-jump` allows egress to the VPC CIDR (SSM interface endpoints, BIG-IP
+management) and, optionally, to the VIP prefix. **None of that covers S3.** The stack does
+create an S3 gateway endpoint and the jump host's subnet route table is associated with it,
+but a gateway endpoint gives S3 no address inside the VPC - traffic still leaves for S3's own
+address ranges, it just never crosses the internet. A security group cannot express that with
+a CIDR, so the module takes an AWS-managed prefix list ID instead and adds one conditional
+egress rule on 443.
+
+Default is `''`, meaning no S3 egress. That is deliberate: the jump host does not need S3 to
+do its job, and Session Manager itself runs over the `ssm`/`ssmmessages`/`ec2messages`
+interface endpoints. The parameter exists for one diagnostic - proving from inside the VPC
+that the artifacts the BIG-IPs fetch at boot are reachable, which the section 4.5 check from
+an operator's workstation cannot prove because it uses a different path.
+
+Two things to keep in mind if you change this:
+
+- A prefix list is Region-specific. `com.amazonaws.us-gov-east-1.s3` and
+  `com.amazonaws.us-gov-west-1.s3` have different IDs, so the value cannot be defaulted in
+  the template.
+- The rule permits egress to *every* S3 bucket in the Region, not only the staging bucket.
+  That is the granularity a prefix list offers; there is no narrower form. Blank remains the
+  right default for a build that does not need the check.
 
 ## Converging later
 

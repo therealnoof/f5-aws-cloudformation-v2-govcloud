@@ -44,6 +44,7 @@ Metadata:
           - provisionSsmAccess
           - ssmJumpInstanceType
           - ssmJumpCustomImageId
+          - ssmJumpS3PrefixListId
           - provisionBastion
           - restrictedSrcAddressMgmt
           - restrictedSrcAddressApp
@@ -172,6 +173,8 @@ Metadata:
         default: Session Manager jump host AMI (leave empty for the Amazon Linux 2023 lookup)
       ssmJumpInstanceType:
         default: Session Manager jump host instance type
+      ssmJumpS3PrefixListId:
+        default: S3 prefix list ID, so the jump host can verify the staging bucket
       subnetMask:
         default: Subnet Mask
       uniqueString:
@@ -596,6 +599,23 @@ Parameters:
     Description: EC2 instance type for the Session Manager jump host. It only terminates
       SSM sessions and forwards ports, so the smallest type available in the Region is
       normally enough. Only used when provisionSsmAccess is true.
+    Type: String
+  ssmJumpS3PrefixListId:
+    AllowedPattern: '^$|^pl-[0-9a-f]+$'
+    ConstraintDescription: Must be empty or an AWS-managed prefix list ID (pl-xxxxxxxx).
+    Default: ''
+    Description: 'OPTIONAL - leave blank unless you want the jump host to be able to read
+      the staging bucket. The stack already creates an S3 gateway endpoint, but a gateway
+      endpoint sends traffic to S3 own address ranges rather than to an address inside the
+      VPC, so the jump host security group - which only allows egress to the VPC CIDR -
+      does not permit it. Supplying the S3 prefix list ID for this Region adds one egress
+      rule on 443 and lets an operator confirm from inside the VPC that the artifacts the
+      BIG-IPs fetch at boot are actually reachable, which is the most common air-gap
+      failure. Traffic stays on the gateway endpoint and never leaves the VPC. Find the ID
+      with: aws ec2 describe-managed-prefix-lists --region <region> --filters
+      Name=prefix-list-name,Values=com.amazonaws.<region>.s3 --query
+      PrefixLists[0].PrefixListId --output text. Only used when provisionSsmAccess is
+      true.'
     Type: String
   subnetMask:
     ConstraintDescription: 'Subnet mask must be in value of 16-28. Total number of
@@ -1095,6 +1115,7 @@ Resources:
                   - Outputs.subnetsA
         customImageId: !Ref 'ssmJumpCustomImageId'
         instanceType: !Ref 'ssmJumpInstanceType'
+        s3PrefixListId: !Ref 'ssmJumpS3PrefixListId'
         uniqueString: !Ref 'uniqueString'
         vipCidr: !Ref 'externalVipCidr'
         vpc: !GetAtt

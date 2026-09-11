@@ -176,6 +176,10 @@
     "ParameterValue": "t3.micro"
   },
   {
+    "ParameterKey": "ssmJumpS3PrefixListId",
+    "ParameterValue": ""
+  },
+  {
     "ParameterKey": "subnetMask",
     "ParameterValue": "24"
   },

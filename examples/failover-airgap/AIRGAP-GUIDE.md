@@ -673,6 +673,19 @@ done
 `.run`, `gpg.key` or an `.rpm` means it was never uploaded — none of them are part of
 `s3 sync`.
 
+> **What this check does and does not prove.** You just ran it 🖥️ WORKSTATION, over the
+> internet. `200` on every line proves the **bucket policy** is right. It does not prove that
+> anything **inside the VPC** can reach the bucket, and the BIG-IPs fetch these objects from
+> inside the VPC with no internet at all. The two paths are different, and the second one is
+> the one that actually matters at boot.
+>
+> There is no way to test the VPC path before deploying, because the jump host that would do
+> the testing is created *by* the stack. If a deployment fails with the BIG-IPs never
+> onboarding, see
+> [the artifacts were never fetched](#the-big-ips-never-fetched-their-artifacts) — it explains
+> how to run this same check from inside the VPC, and the one parameter you need to set to make
+> that possible.
+
 ### 4.6 Pre-flight checks
 
 Three checks that fail *cheaply* now instead of expensively mid-deploy.
@@ -854,6 +867,7 @@ setting:
 | `bigIpInstanceProfile` | Creates a profile with the IAM permissions CFE needs |
 | `bigIpLicenseKey01` / `02` | Correct for PAYG, which is what the default `bigIpImage` is |
 | `ssmJumpCustomImageId` | Uses the current Amazon Linux 2023 AMI |
+| `ssmJumpS3PrefixListId` | The jump host cannot reach S3. Set it only if you want to verify bucket reachability from inside the VPC — see [troubleshooting](#the-big-ips-never-fetched-their-artifacts) |
 
 The console shows the same guidance: each of those descriptions now opens with
 `OPTIONAL - leave blank`.
@@ -2723,6 +2737,71 @@ Your bucket has an older copy of a shared module. The air-gap solution needs the
 `modules/network/network.yaml` and `modules/bigip-standalone/bigip-standalone.yaml`, not
 just the `failover-airgap/` directory. Re-run the `s3 sync` from
 [step 4.4](#44-stage-the-s3-bucket).
+
+### The BIG-IPs never fetched their artifacts
+
+**Symptom.** The stack times out or rolls back, and on a BIG-IP that you kept alive with
+`--on-failure DO_NOTHING`, `/var/log/cloud/startup-script.log` shows a `403`, a `404`, or a
+connection that never completed when fetching the runtime-init installer, `gpg.key` or an RPM.
+Nothing after that point ever ran.
+
+**Why the section 4.5 check can pass and this still happen.** That check runs from your
+workstation, over the internet. The BIG-IPs fetch the same objects from **inside the VPC**,
+with no internet, through the S3 **gateway** endpoint. A bucket policy problem breaks both
+paths; a VPC-side problem breaks only the second one, and the workstation check cannot see it.
+
+**Verify the path the BIG-IPs actually use.** Do it from the jump host, which sits in the same
+VPC. This needs one parameter, because the jump host cannot reach S3 by default:
+
+> **Why a security group rule is needed at all.** The stack already creates the S3 gateway
+> endpoint, and the jump host's subnet route table is already associated with it. But a gateway
+> endpoint does not give S3 an address inside your VPC — traffic still leaves for S3's own
+> public address ranges, it simply never traverses the internet. The jump host's security group
+> allows egress only to the VPC CIDR, so it does not cover those ranges. An AWS-managed
+> **prefix list** is the only way to write "S3 in this Region" as a security group destination.
+
+Find the prefix list ID for your Region 🖥️ WORKSTATION:
+
+```bash
+aws ec2 describe-managed-prefix-lists --region "$REGION" \
+  --filters "Name=prefix-list-name,Values=com.amazonaws.${REGION}.s3" \
+  --query 'PrefixLists[0].PrefixListId' --output text
+```
+
+Set that value as `ssmJumpS3PrefixListId` and redeploy, or update the existing stack. Then,
+from a jump host shell 🔒 JUMP HOST, run the same reachability check section 4.5 ran — this
+time over the path that matters:
+
+```bash
+BUCKET=f5-cft-gov                                    # your staging bucket
+PREFIX=f5-aws-cloudformation-v2/v3.6.0.0/examples    # your prefix
+REGION=us-gov-east-1
+
+for KEY in \
+  "${PREFIX}/f5-bigip-runtime-init-2.0.3-1.gz.run" \
+  "${PREFIX}/gpg.key" \
+  "${PREFIX}/bigip-extensions/f5-declarative-onboarding-1.47.0-14.noarch.rpm" \
+  "${PREFIX}/bigip-extensions/f5-appsvcs-3.56.0-10.noarch.rpm" \
+  "${PREFIX}/bigip-extensions/f5-cloud-failover-2.4.0-0.noarch.rpm"; do
+  printf '%s  %s\n' \
+    "$(curl -sk --max-time 15 -o /dev/null -w '%{http_code}' \
+       "https://${BUCKET}.s3.${REGION}.amazonaws.com/${KEY}")" "$KEY"
+done
+```
+
+How to read the result:
+
+| Result from the jump host | Meaning |
+|---|---|
+| `200` on every line | The VPC path is fine. The artifacts are reachable and the failure is elsewhere — read `/var/log/cloud/startup-script.log` on the BIG-IP. |
+| `403` | Bucket policy or Block Public Access. Same cause as a `403` from your workstation — redo [section 4.5](#45-make-the-artifacts-readable-required). |
+| `404` | That object was never uploaded. The `.run`, `gpg.key` and the RPMs are **not** part of `s3 sync` — they need the `s3 cp` commands in [section 4.4](#44-stage-the-s3-bucket). |
+| `000`, or it hangs to the `--max-time` | The request never completed. Either `ssmJumpS3PrefixListId` is not set on the running stack, or the S3 gateway endpoint is missing from this subnet's route table. |
+
+> **This is a diagnostic, not a security hole, but it is also not free.** The rule permits
+> egress to every S3 bucket in the Region, not only yours — that is the granularity a prefix
+> list offers. Traffic stays on the gateway endpoint and never reaches the internet. Leave the
+> parameter blank on a build where you do not need the check.
 
 ### `Failover initialization failed` / `ECONNREFUSED` during onboarding
 
