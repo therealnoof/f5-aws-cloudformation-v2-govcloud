@@ -1272,84 +1272,254 @@ ssh -p 2222 admin@localhost
 
 ## 6. Validating the deployment
 
-Run these after `CREATE_COMPLETE`, before testing failover. They confirm the five
-requirements from [section 2](#five-things-must-line-up) are actually in place.
+Run these after the stack reaches `CREATE_COMPLETE` and **before** testing failover. They
+confirm the five requirements from [section 2](#five-things-must-line-up) are actually in
+place. Checks 1 and 2 are the ones that catch a silently broken VIP, so do not skip them
+because the stack said `CREATE_COMPLETE` — it can and does.
 
-First collect the values you need:
+**Six checks, on two different machines.** Know which one you are typing on before you start
+(see [section 3.2](#32-three-machines--know-which-one-you-are-typing-on)):
+
+| Check | What it proves | Where you run it |
+|---|---|---|
+| 1 | Source/dest check is off, so AWS will deliver alien-IP packets | 🖥️ WORKSTATION |
+| 2 | Every route table is tagged and carries the alien prefix | 🖥️ WORKSTATION |
+| 3 | CFE found those route tables | 🔒 JUMP HOST |
+| 4 | CFE's next-hop addresses are in the form it can use | 🔒 JUMP HOST |
+| 5 | The active device and the route target agree | 🖥️ WORKSTATION + ⚙️ BIG-IP |
+| 6 | The VIP actually answers | 🔒 JUMP HOST |
+
+### 6.1 Collect the values — 🖥️ WORKSTATION
+
+Nothing below asks you to read an ID off a table and retype it. This block pulls every value
+the checks need straight out of the stack outputs. Run it from the same terminal where
+`REGION` and `STACK` are still set (section 4.1 — if you opened a new window, set them again):
 
 ```bash
-aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
-  --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
+# one call, reused for every lookup below
+OUT=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+  --query 'Stacks[0].Outputs' --output json)
+
+# helper: pull one output value out of that JSON by its key
+o() { printf '%s' "$OUT" | python3 -c \
+  "import sys,json; print(next((x['OutputValue'] for x in json.load(sys.stdin) if x['OutputKey']=='$1'), ''))"; }
+
+ENI01=$(o bigIpExternalInterfaceId01)   # instance A external interface — initial route target
+ENI02=$(o bigIpExternalInterfaceId02)   # instance B external interface
+MGMT01=$(o bigIpInstanceMgmtPrivateIp01)
+MGMT02=$(o bigIpInstanceMgmtPrivateIp02)
+VIP=$(o vipAddress)                     # e.g. 10.99.0.100
+VIPCIDR=$(o vipRouteCidr)               # e.g. 10.99.0.0/24  — the alien prefix
+JUMP=$(o ssmJumpInstanceId)
+
+# vipRouteTableIds is a COMMA-separated list; the CLI wants them space-separated
+RTBS=$(o vipRouteTableIds | tr ',' ' ')
+
+printf 'ENI01=%s\nENI02=%s\nMGMT01=%s\nMGMT02=%s\nVIP=%s\nVIPCIDR=%s\nRTBS=%s\nJUMP=%s\n' \
+  "$ENI01" "$ENI02" "$MGMT01" "$MGMT02" "$VIP" "$VIPCIDR" "$RTBS" "$JUMP"
 ```
 
-Note `bigIpExternalInterfaceId01/02`, `vipRouteTableIds`, `vipAddress` and
-`ssmJumpInstanceId` — the checks below use them. Substitute your own IDs for the examples.
+Every line of that output must have a value after the `=`. **A blank means the lookup failed**,
+almost always because `REGION` or `STACK` is wrong, or because the stack has not reached
+`CREATE_COMPLETE` yet — outputs do not populate until it does.
 
-**Check 1 — source/destination checking must be `False` on both external interfaces:**
+### 6.2 Check 1 — source/destination checking must be off — 🖥️ WORKSTATION
+
+This is the check that catches the most confusing possible failure. With source/dest checking
+on, AWS silently discards every packet destined for the VIP **before the BIG-IP sees it** — no
+log, no counter, no error anywhere. The stack looks perfect and the VIP simply never answers:
 
 ```bash
 aws ec2 describe-network-interfaces --region "$REGION" \
-  --network-interface-ids eni-AAAA eni-BBBB \
+  --network-interface-ids "$ENI01" "$ENI02" \
   --query 'NetworkInterfaces[].[NetworkInterfaceId,SourceDestCheck]' --output table
 ```
 
-**Check 2 — every route table tagged, and carrying the VIP route:**
+```
+----------------------------------------
+|       DescribeNetworkInterfaces      |
++-------------------------+------------+
+|  eni-0a1b2c3d4e5f6a7b8  |  False     |
+|  eni-0b2c3d4e5f6a7b8c9  |  False     |
++-------------------------+------------+
+```
+
+> **`False` is the passing answer here**, which reads backwards the first time you see it.
+> The column is "is the check enabled", and you need it **disabled**. `True` on either row
+> means that device cannot serve the VIP. See
+> [troubleshooting](#the-vip-does-not-answer-at-all).
+
+### 6.3 Check 2 — every route table tagged, and carrying the alien prefix — 🖥️ WORKSTATION
 
 ```bash
+# $RTBS is deliberately UNQUOTED: it holds several IDs that must
+# arrive as separate arguments, not as one string
 aws ec2 describe-route-tables --region "$REGION" \
-  --route-table-ids rtb-AAAA rtb-BBBB rtb-CCCC \
-  --query "RouteTables[].[RouteTableId,Tags[?Key=='f5_cloud_failover_label'].Value|[0],Routes[?DestinationCidrBlock=='10.99.0.0/24'].NetworkInterfaceId|[0]]" \
+  --route-table-ids $RTBS \
+  --query "RouteTables[].[RouteTableId,Tags[?Key=='f5_cloud_failover_label'].Value|[0],Routes[?DestinationCidrBlock=='${VIPCIDR}'].NetworkInterfaceId|[0]]" \
   --output table
 ```
 
-All three rows should show the tag value (`bigip_high_availability_solution` by default)
-and the **same** external interface ID — instance A's, since the template points them
-there initially.
+Three things must be true of that table:
 
-**Check 3 — CFE has discovered the routes.** From a jump host shell:
+1. **One row per route table** — three of them in the default two-AZ build.
+2. **The middle column is populated on every row** (`bigip_high_availability_solution` by
+   default). `None` there means the table is not tagged, so CFE will not manage it and that
+   subnet's traffic will not follow a failover. This is the `cfeTag` parameter.
+3. **The right-hand column shows the same interface ID on every row**, and it matches
+   `$ENI01` — instance A's external interface, where the template points the routes initially.
+
+`None` in the right-hand column means no route exists for the alien prefix in that table — the
+CLI prints `None`, not an empty cell, for a value it did not find. If the tag column is `None`
+instead, the table exists but was never tagged. Either way, see
+[troubleshooting](#the-vip-does-not-answer-at-all).
+
+### 6.4 Get onto the jump host — 🔒 JUMP HOST
+
+Checks 3, 4 and 6 talk to the BIG-IPs and to the VIP, which are only reachable from inside the
+VPC. Open a shell on the jump host 🖥️ WORKSTATION:
 
 ```bash
-PW='<admin password>'
-curl -sku admin:"$PW" https://10.0.1.11/mgmt/shared/cloud-failover/inspect | python3 -m json.tool
+aws ssm start-session --region "$REGION" --target "$JUMP"
 ```
 
-`"routes"` must list your three route tables. `"addresses"` being empty is correct — this
-design has no Elastic IPs to move. Note which device reports `"deviceStatus": "active"`.
+> **The jump host cannot look these values up for itself.** Its instance profile carries only
+> `AmazonSSMManagedInstanceCore` — deliberately, so that a shell on the jump host is not a
+> route to your account. That means no `cloudformation:DescribeStacks` and no
+> `secretsmanager:GetSecretValue`: running the section 6.1 block there fails with an access
+> or endpoint error. That is least privilege working, not a broken jump host.
 
-**Check 4 — the next-hop list must contain bare addresses.** On **both** devices:
+So carry the values across. **Back on 🖥️ WORKSTATION**, print a ready-made block — this also
+fetches the admin password, which the checks need:
 
 ```bash
-curl -sku admin:"$PW" https://10.0.1.11/mgmt/shared/cloud-failover/declare \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["declaration"]["failoverRoutes"]["routeGroupDefinitions"][0]["defaultNextHopAddresses"]["items"])'
-# → ['10.0.0.11', '10.0.4.11']     ✅ both bare
-# → ['10.0.0.11/24', '10.0.4.11']  ❌ see troubleshooting
+SECRET=$(o bigIpSecretArn)
+PW=$(aws secretsmanager get-secret-value --region "$REGION" \
+  --secret-id "$SECRET" --query SecretString --output text)
+
+# %q shell-quotes each value, so a password containing a space, $, quote or
+# backslash still pastes correctly on the other side
+printf 'MGMT01=%q\nMGMT02=%q\nVIP=%q\nPW=%q\n' "$MGMT01" "$MGMT02" "$VIP" "$PW"
 ```
 
-**Check 5 — the active device and the route target must agree.** This one catches a real
-condition seen in the lab: the template points all three routes at instance A when the stack
-is built, but the initial election can make **instance B** active. CFE only acts on a
-failover *transition*, so coming up active at boot does not move the routes - and the stack
-reaches `CREATE_COMPLETE` with a VIP that has never passed traffic.
+Copy those four lines and paste them into the **jump host** shell. Everything from here to the
+end of section 6 runs there.
 
-Compare the `deviceStatus` from check 3 with the route target from check 2. If they name
-different devices, run **one** failover from the active device to sync them:
+> **Why `%q` and not plain `%s`.** If you supplied your own secret in section 4.2 — which is
+> the recommended path — the password can contain a space, `$`, a quote or a backslash. Pasted
+> unquoted, `PW=two words` sets `PW=two` and then tries to run `words`. `%q` shell-quotes each
+> value so it survives the paste intact.
+
+> **This puts the admin password into that shell's history and process list.** On a
+> single-operator lab jump host that is an acceptable trade for a readable procedure. It is
+> also one more reason the host is thrown away with the stack in section 10. Run
+> `unset PW; history -c` before you leave the session if the account is shared.
+
+### 6.5 Check 3 — CFE has discovered the routes — 🔒 JUMP HOST
+
+```bash
+curl -sku "admin:$PW" "https://${MGMT01}/mgmt/shared/cloud-failover/inspect" \
+  | python3 -m json.tool
+```
+
+What to look for in the JSON:
+
+| Field | Expected |
+|---|---|
+| `"routes"` | Lists **your three route tables**. Empty here means CFE found nothing to manage and failover will do nothing. |
+| `"addresses"` | **Empty is correct.** This design has no Elastic IPs and no secondary private IPs to move — only routes. |
+| `"deviceStatus"` | Either `active` or `standby`. **Write down which device says `active`** — checks 5 and 6 both need it. |
+
+### 6.6 Check 4 — the next-hop list must contain bare addresses — 🔒 JUMP HOST
+
+CFE matches its next-hop list against the Self IPs it discovers. A next hop written with a
+mask never matches, so CFE finds no candidate interface and the route is never moved. Run this
+against **both** devices — the loop does both for you:
+
+```bash
+for IP in "$MGMT01" "$MGMT02"; do
+  echo "--- $IP ---"
+  curl -sku "admin:$PW" "https://${IP}/mgmt/shared/cloud-failover/declare" \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["declaration"]["failoverRoutes"]["routeGroupDefinitions"][0]["defaultNextHopAddresses"]["items"])'
+done
+```
+
+```
+--- 10.0.1.11 ---
+['10.0.0.11', '10.0.4.11']        ✅ both bare — correct
+--- 10.0.5.11 ---
+['10.0.0.11/24', '10.0.4.11']     ❌ a mask on the first entry — see troubleshooting
+```
+
+Both devices must print bare addresses with no `/mask`. If either shows a mask, see
+[troubleshooting](#the-vip-does-not-answer-at-all).
+
+### 6.7 Check 5 — the active device and the route target must agree
+
+This one catches a real condition seen in the lab, and it is the reason a stack can reach
+`CREATE_COMPLETE` with a VIP that has never passed a packet. The template points all three
+routes at **instance A** when the stack is built, but the initial cluster election can make
+**instance B** active. CFE only acts on a failover *transition* — coming up active at boot is
+not a transition, so it never moves the routes.
+
+Compare two things you already have:
+
+- the device reporting `"deviceStatus": "active"` in **check 3**, and
+- the interface ID in the right-hand column of **check 2**.
+
+`$ENI01` is instance A, `$ENI02` is instance B. If they name the **same** device, this check
+passes and you are done — move to 6.8.
+
+If they name **different** devices, run one failover **from the device that is currently
+active** to make them agree. Get a shell on that device (⚙️ BIG-IP — from the jump host,
+`ssh admin@$MGMT01` or `ssh admin@$MGMT02`, same admin password), then:
 
 ```bash
 tmsh run sys failover standby
 ```
 
-Then re-check. This is a normal post-deployment step, not a fault.
+Re-run check 2. The route target should now be the other device's interface, matching whatever
+went active.
 
-**Check 6 — the VIP answers.** From a jump host shell:
+> **This is a normal post-deployment step, not a fault.** It is a one-time reconciliation of
+> the template's initial guess with the cluster's own election. Once they agree, every
+> subsequent failover is a real transition and CFE handles it automatically.
+
+### 6.8 Check 6 — the VIP answers — 🔒 JUMP HOST
 
 ```bash
-curl -sk https://10.99.0.100/ | grep -oE 'failover0[12][.a-z]*'
+curl -sk --max-time 10 "https://${VIP}/" | grep -oE 'failover0[12][.a-z]*'
 ```
 
-With no back-end application deployed, a built-in iRule answers and names the device that
-served the request. Confirm it matches the device reporting `active` in check 3. If the
-route points at the standby, the VIP will hang — see
+Expect a single line naming the device that served the request — `failover01` or
+`failover02`. It must match the device reporting `active` in check 3.
+
+> **With no back-end application deployed** (`provisionExampleApp=false`, the default) a
+> built-in iRule answers directly and names the device. The pool is genuinely empty, so the
+> GUI shows the virtual server as **Available (Offline)** while `curl` returns `200`. Both are
+> correct — see the note at the end of [section 5.1](#51-the-big-ip-web-gui-tmui).
+
+**If this returns nothing**, the `--max-time 10` above means it fails in ten seconds rather
+than hanging. The usual cause is that the route points at the standby device — which is
+check 5, not a fault in the VIP. Work back through checks 1, 2 and 5 in that order, then see
 [troubleshooting](#the-vip-does-not-answer-at-all).
+
+### 6.9 Scoreboard
+
+All six should be true before you move on to failover testing:
+
+| # | Passing result |
+|---|---|
+| 1 | `SourceDestCheck` is `False` on **both** external interfaces |
+| 2 | Every route table row shows the tag **and** the same interface ID |
+| 3 | `"routes"` lists your route tables; `"addresses"` is empty |
+| 4 | `defaultNextHopAddresses` are bare on **both** devices |
+| 5 | The `active` device matches the interface the routes point at |
+| 6 | The VIP returns the name of that same device |
+
+If all six pass, the design is working end to end and [section 8](#8-testing-failover) will
+move the VIP. If any fail, fix it before failing over — a failover test on a broken VIP tells
+you nothing you did not already know.
 
 ---
 
