@@ -795,6 +795,23 @@ cd "$(git rev-parse --show-toplevel)"
 
 It is a plain JSON list of `ParameterKey` / `ParameterValue` pairs. Change only the values.
 
+> **You do not upload this file.** Unlike the templates, the parameters file is read from
+> your **local clone** — the `--parameters file://...` argument in section 4.8 is a local
+> path, resolved by the AWS CLI on your workstation before the API call is made. Nothing in
+> S3 and nothing on the BIG-IPs ever reads it. Edit it and launch; there is no `s3 sync` or
+> `s3 cp` step for this file.
+>
+> The one thing that trips people up: the section 4.4 `aws s3 sync ./examples/` does copy a
+> snapshot of this file into the bucket, because it lives under `examples/`. That copy is
+> inert — it is never fetched by anything. Do not go looking at it to check your values, and
+> do not be alarmed when it is out of date.
+
+> **Templates are the opposite**, and this is worth keeping straight because it is the more
+> common mistake in the other direction: if you edit `failover-airgap.yaml`, anything under
+> `modules/`, or a runtime-init config, you **must** re-run the section 4.4 `s3 sync` before
+> launching. CloudFormation and the BIG-IPs read those from the bucket, never from your
+> clone. Section 4.6's pre-flight check exists to catch exactly that.
+
 **Two parameters have no default — CloudFormation will not launch without them:**
 
 | Parameter | Value |
@@ -845,6 +862,19 @@ The full parameter reference is in [README.md](README.md#template-input-paramete
 
 ### 4.8 Launch
 
+There are two ways to launch, and they produce an identical stack. Pick one:
+
+- **Option A — AWS CLI.** Uses the parameters file you just edited, so your values are
+  version-controlled and the launch is repeatable. Recommended if you expect to rebuild.
+- **Option B — AWS console (GUI).** You paste the template's S3 URL and type the parameters
+  into a form. Better if you are demonstrating the stack to someone, or if you would rather
+  read each parameter's description on screen than in a JSON file.
+
+Both read the **same template out of the same bucket**, so section 4.4 and section 4.5 must be
+done either way.
+
+#### Option A — launch from the CLI
+
 🖥️ WORKSTATION, **from the repository root** — `--parameters file://examples/...` is a relative
 path and fails from anywhere else:
 
@@ -862,6 +892,60 @@ aws cloudformation create-stack --region "$REGION" \
 > failed stack deletes its instances, taking the logs with it. `DO_NOTHING` preserves them
 > so you can get on the boxes and read what happened. You clean up manually afterwards.
 
+#### Option B — launch from the AWS console
+
+🖥️ WORKSTATION — **first, print the URL you are going to paste.** It is the same string
+`--template-url` uses above, and mistyping it is the most common reason this path fails:
+
+```bash
+echo "https://${BUCKET}.s3.${REGION}.amazonaws.com/${PREFIX}/failover-airgap/failover-airgap.yaml"
+```
+
+Copy that whole line of output. Then, in the AWS console:
+
+1. Switch the console to the **same Region as the bucket** (`us-gov-east-1` in this guide).
+   A template URL in another Region will not load.
+2. **CloudFormation → Stacks → Create stack → With new resources (standard)**.
+3. Under *Prepare template*, leave **Choose an existing template** selected.
+4. Under *Specify template*, choose **Amazon S3 URL** and paste the URL you just printed.
+5. **Next**, then give the stack a name — `failover-airgap` matches `$STACK` in this guide.
+6. Fill in the parameter form. The console renders one field per parameter with its
+   description, so section 4.7's table maps straight onto it. Set at minimum
+   `restrictedSrcAddressMgmt`, `restrictedSrcAddressApp`, `bigIpSecretArn`, `s3BucketName`,
+   `s3BucketRegion` and `artifactLocation`. **Leave the empty-string defaults empty** — they
+   are optional overrides, and their descriptions open with `OPTIONAL - leave blank`.
+7. **Next**. Under *Stack failure options*, choosing **Preserve successfully provisioned
+   resources** is the console equivalent of `--on-failure DO_NOTHING`, and is worth doing on a
+   first deployment for the same reason.
+8. **Next**, tick **I acknowledge that AWS CloudFormation might create IAM resources with
+   custom names** — this is the console equivalent of `--capabilities CAPABILITY_NAMED_IAM`,
+   and the stack cannot be created without it.
+9. **Submit**.
+
+> **Use the `https://` object URL, not the `s3://` one.** `s3://bucket/key` is the form
+> `aws s3 cp` takes; the console's *Amazon S3 URL* field wants the HTTPS object URL. If you
+> would rather copy it from the console than run the `echo` above, open the object in the S3
+> console and use its **Object URL** field — that is the same string.
+
+> **The console does not read `failover-airgap-parameters.json`.** There is no way to upload a
+> parameters file in the create-stack form, so the values are typed rather than loaded. Keep
+> the JSON file open beside the browser and use it as your checklist — especially for
+> `s3BucketName`, `s3BucketRegion` and `artifactLocation`, because those three are what the
+> parent template uses to build the URLs of its **nested** templates. If they are wrong, the
+> parent stack starts and then fails on the first nested stack with a template-not-found
+> error, which reads confusingly given the parent template obviously loaded.
+
+> **Labels move between console versions and Regions.** If your console offers
+> *Build from Infrastructure Composer* (formerly *Create template in Designer*) instead of the
+> wording above, ignore it — that is the visual template **authoring** tool. You are not
+> authoring a template here, you are launching one that already exists in your bucket, so the
+> field you want is always *Amazon S3 URL*.
+
+> **A private bucket is fine for this.** The console fetches the template with **your** IAM
+> credentials, not anonymously. The anonymous read access you set up in section 4.5 is for the
+> BIG-IPs fetching the installer and RPMs at boot — a different set of objects, and still
+> required whichever launch option you pick.
+
 ### 4.9 What to expect while it builds
 
 **`CREATE_IN_PROGRESS` for roughly 25–30 minutes is normal**, not a hang. BIG-IP has a
@@ -871,7 +955,9 @@ cluster out of band. The stack only signals success once the cluster is genuinel
 **In Sync**. The signal timeout is 50 minutes, after which a real failure surfaces as
 `CREATE_FAILED` rather than hanging forever.
 
-Watch progress:
+Watch progress. If you launched from the console you can watch the same thing in the stack's
+**Events** tab — it is the same data, just rendered; the CLI form below is handy because it
+filters out the noise of every `CREATE_IN_PROGRESS`:
 
 ```bash
 aws cloudformation describe-stack-events --region "$REGION" --stack-name "$STACK" \
