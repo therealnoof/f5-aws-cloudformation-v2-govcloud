@@ -1474,8 +1474,10 @@ of section 6 runs in this shell.
 ### 6.5 Check 3 — CFE has discovered the routes — 🔒 JUMP HOST
 
 ```bash
-curl -sku "admin:$PW" "https://${MGMT01}/mgmt/shared/cloud-failover/inspect" \
-  | python3 -m json.tool
+# 🔒 JUMP HOST
+curl -sku "admin:$PW" --max-time 15 "https://${MGMT01}/mgmt/shared/cloud-failover/inspect" \
+  | python3 -m json.tool \
+  || echo "no JSON came back - see 'when this errors instead of printing' below"
 ```
 
 What to look for in the JSON:
@@ -1493,10 +1495,25 @@ mask never matches, so CFE finds no candidate interface and the route is never m
 against **both** devices — the loop does both for you:
 
 ```bash
+# 🔒 JUMP HOST
 for IP in "$MGMT01" "$MGMT02"; do
   echo "--- $IP ---"
-  curl -sku "admin:$PW" "https://${IP}/mgmt/shared/cloud-failover/declare" \
-    | python3 -c 'import sys,json; print(json.load(sys.stdin)["declaration"]["failoverRoutes"]["routeGroupDefinitions"][0]["defaultNextHopAddresses"]["items"])'
+  BODY=$(curl -sku "admin:$PW" --max-time 15 "https://${IP}/mgmt/shared/cloud-failover/declare")
+  if [ -z "$BODY" ]; then
+    echo "    no response - is $IP really a BIG-IP management address, and reachable?"
+    continue
+  fi
+  printf '%s' "$BODY" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit("    not JSON - usually a 401 (wrong password) or an HTML error page")
+try:
+    print(d["declaration"]["failoverRoutes"]["routeGroupDefinitions"][0]["defaultNextHopAddresses"]["items"])
+except Exception:
+    sys.exit("    no failoverRoutes block - is CFE configured on this device?")
+'
 done
 ```
 
@@ -1509,6 +1526,20 @@ done
 
 Both devices must print bare addresses with no `/mask`. If either shows a mask, see
 [troubleshooting](#the-vip-does-not-answer-at-all).
+
+> ### When this errors instead of printing
+>
+> | What you see | What it means |
+> |---|---|
+> | `no response - is ... really a BIG-IP management address` | Wrong address, or the device is unreachable from the jump host. |
+> | `not JSON - usually a 401` | The password is wrong. Re-read it from Secrets Manager rather than retyping. |
+> | `no failoverRoutes block` | The device answered, but CFE has no route configuration — the deploy did not finish. |
+>
+> **Check the third octet of the two management addresses.** They are in *different subnets*,
+> one per AZ — `10.0.1.11` and `10.0.5.11` with the default addressing. The digit that changes
+> is the **third**, not the fourth. Transposing them into something like `10.0.1.5` is the
+> easiest mistake to make when typing the values by hand, and the request then goes to an
+> address that is not a BIG-IP at all.
 
 ### 6.7 Check 5 — the active device and the route target must agree
 
