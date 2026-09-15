@@ -1603,7 +1603,16 @@ went active.
 ### 6.8 Check 6 — the VIP answers — 🔒 JUMP HOST
 
 ```bash
-curl -sk --max-time 10 "https://${VIP}/" | grep -oE 'failover0[12][.a-z]*'
+# 🔒 JUMP HOST
+if [ -z "$VIP" ]; then
+  echo "STOP: \$VIP is not set in this shell - that is the problem, not the VIP."
+  echo "      Set it to your externalVipAddress, e.g.  VIP=10.99.0.100"
+else
+  CODE=$(curl -sk --max-time 10 -o /tmp/vip.out -w '%{http_code}' "https://${VIP}/")
+  echo "HTTP $CODE from $VIP"
+  grep -oE 'failover0[12][.a-z]*' /tmp/vip.out \
+    || echo "    (no device name in the response - see the table below)"
+fi
 ```
 
 Expect a single line naming the device that served the request — `failover01` or
@@ -1614,10 +1623,22 @@ Expect a single line naming the device that served the request — `failover01` 
 > GUI shows the virtual server as **Available (Offline)** while `curl` returns `200`. Both are
 > correct — see the note at the end of [section 5.1](#51-the-big-ip-web-gui-tmui).
 
-**If this returns nothing**, the `--max-time 10` above means it fails in ten seconds rather
-than hanging. The usual cause is that the route points at the standby device — which is
-check 5, not a fault in the VIP. Work back through checks 1, 2 and 5 in that order, then see
-[troubleshooting](#the-vip-does-not-answer-at-all).
+**Reading the result.** The status code is printed first precisely so that "nothing came
+back" and "you did not set a variable" cannot look the same:
+
+| What you see | What it means |
+|---|---|
+| `HTTP 200` and a device name | Pass. |
+| `STOP: $VIP is not set` | Nothing is wrong with the deployment. You are on the jump host and `VIP` was never carried across — see [section 6.4](#64-get-onto-the-jump-host--️-workstation-then--jump-host). This is easy to hit when you type the values by hand. |
+| `HTTP 000` | Nothing answered within ten seconds. The usual cause is that the route points at the **standby** device — that is check 5, not a fault in the VIP. Work back through checks 1, 2 and 5 in that order. |
+| `HTTP 200` but no device name | Something answered, but not the demo iRule. You may have a real pool behind the VIP, or `provisionExampleApp=true`. |
+| Any other code | The BIG-IP is answering, so the network path is fine — the problem is the virtual server or its pool. |
+
+> **`HTTP 000` is curl's way of saying "no response at all"** — not a status the server sent.
+> It means the request timed out or the connection never completed, which is exactly what a
+> route pointed at the wrong device looks like from here.
+
+Then see [troubleshooting](#the-vip-does-not-answer-at-all).
 
 ### 6.9 Scoreboard
 
