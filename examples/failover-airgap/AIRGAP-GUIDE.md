@@ -1742,26 +1742,51 @@ self-signed cert, not a proxy problem.
 **Test both directions.** They exercise different devices, and a fault can exist in only
 one — which is exactly what happened during validation of this design.
 
-**Window 1** — a shell on the jump host, running the measurement loop. Start it *before*
-you trigger anything:
+**Both windows are jump host shells**, and the route check at the end is on your
+workstation. The variables below are the ones section 6 set — `VIP`, `MGMT01`, `MGMT02` and
+`PW` in the jump host shells, `RTBS`, `VIPCIDR` and `REGION` on the workstation. Nothing here
+needs an address typed by hand.
+
+**Window 1 — the measurement loop.** Start it *before* you trigger anything. 🖥️ WORKSTATION
+to open the session, then the loop runs 🔒 JUMP HOST:
 
 ```bash
+# 🖥️ WORKSTATION
 aws ssm start-session --region "$REGION" --target "$JUMP"
 ```
+
 ```bash
-while true; do
-  T=$(date +%H:%M:%S.%2N)
-  R=$(curl -sk --max-time 1 https://10.99.0.100/ | grep -oE 'failover0[12][.a-z]*' | head -1)
-  echo "$T ${R:-DOWN}"
-  sleep 0.5
+# 🔒 JUMP HOST - VIP must be set in THIS shell; section 6.4 carries it across
+if [ -z "$VIP" ]; then
+  echo "STOP: \$VIP is not set in this shell - set it first, e.g.  VIP=10.99.0.100"
+else
+  while true; do
+    T=$(date +%H:%M:%S.%2N)
+    R=$(curl -sk --max-time 1 "https://${VIP}/" | grep -oE 'failover0[12][.a-z]*' | head -1)
+    echo "$T ${R:-DOWN}"
+    sleep 0.5
+  done
+fi
+```
+
+**Window 2 — trigger the failover.** A second jump host shell. First confirm **which device is
+active**, because you must trigger on that one:
+
+```bash
+# 🔒 JUMP HOST - which device is active right now?
+for IP in "$MGMT01" "$MGMT02"; do
+  printf '%-12s ' "$IP"
+  curl -sku "admin:$PW" --max-time 15 "https://${IP}/mgmt/shared/cloud-failover/inspect" \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["hostName"], d["deviceStatus"])' \
+    || echo "(no answer)"
 done
 ```
 
-**Window 2** — a second jump host shell; SSH to whichever device is **active** and trigger:
+Then SSH to whichever reported `active` and trigger:
 
 ```bash
 # 🔒 JUMP HOST → ⚙️ BIG-IP (the tmsh lines run on the device once ssh connects)
-ssh admin@10.0.1.11
+ssh admin@"$MGMT01"               # or "$MGMT02" - whichever reported active above
 tmsh show cm failover-status      # confirm this device is ACTIVE first
 tmsh run sys failover standby
 ```
@@ -1783,12 +1808,14 @@ apart. Counting `DOWN` lines badly understates the outage. Measure last-good to 
 17:52:00.88  failover02.local   ← first good response from B
 ```
 
-**Confirm the routes actually moved:**
+**Confirm the routes actually moved** — 🖥️ WORKSTATION, where section 6.1 set `RTBS` and
+`VIPCIDR`:
 
 ```bash
+# 🖥️ WORKSTATION
 aws ec2 describe-route-tables --region "$REGION" \
-  --route-table-ids rtb-AAAA rtb-BBBB rtb-CCCC \
-  --query "RouteTables[].[RouteTableId,Routes[?DestinationCidrBlock=='10.99.0.0/24'].NetworkInterfaceId|[0]]" \
+  --route-table-ids "${RTBS[@]}" \
+  --query "RouteTables[].[RouteTableId,Routes[?DestinationCidrBlock=='${VIPCIDR}'].NetworkInterfaceId|[0]]" \
   --output table
 ```
 
@@ -1802,6 +1829,10 @@ grep -E 'Next hop address|Update required|Route\(s\) updated|No route operations
 # want: "Next hop address: 10.0.x.11" and "Route(s) updated successfully"
 # not:  "Next hop address: undefined" or "No route operations to run"
 ```
+
+A healthy run shows, per failover: one `Next hop address` line carrying a **bare** address
+with no `/mask`, one `Update required (true)` per route table — three of them in the default
+build — and a single `Route(s) updated successfully`.
 
 Then fail back and repeat.
 
@@ -1862,7 +1893,7 @@ and not a fault — the extra time is detection, which a commanded failover skip
 > prev=""
 > while true; do
 >   t=$(date +%H:%M:%S.%3N)
->   c=$(curl -s -m 2 -o /dev/null -w '%{http_code}' http://10.99.0.100/ 2>/dev/null || echo 000)
+>   c=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://${VIP}/" 2>/dev/null || echo 000)
 >   [ "$c" != "$prev" ] && { echo "$t  $c"; prev=$c; }
 >   sleep 0.5
 > done
