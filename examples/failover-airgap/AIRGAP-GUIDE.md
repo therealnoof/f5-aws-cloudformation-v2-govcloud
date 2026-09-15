@@ -1326,12 +1326,22 @@ VIP=$(o vipAddress)                     # e.g. 10.99.0.100
 VIPCIDR=$(o vipRouteCidr)               # e.g. 10.99.0.0/24  — the alien prefix
 JUMP=$(o ssmJumpInstanceId)
 
-# vipRouteTableIds is a COMMA-separated list; the CLI wants them space-separated
-RTBS=$(o vipRouteTableIds | tr ',' ' ')
+# vipRouteTableIds is a COMMA-separated list and the CLI wants each ID as its own
+# argument. Use an ARRAY: it expands the same way in bash and zsh. A plain string
+# does not - zsh never word-splits an unquoted variable, so all three IDs would
+# arrive as one argument and the CLI would reject them as a single unknown ID.
+RTBS=( $(o vipRouteTableIds | tr ',' ' ') )
 
 printf 'ENI01=%s\nENI02=%s\nMGMT01=%s\nMGMT02=%s\nVIP=%s\nVIPCIDR=%s\nRTBS=%s\nJUMP=%s\n' \
-  "$ENI01" "$ENI02" "$MGMT01" "$MGMT02" "$VIP" "$VIPCIDR" "$RTBS" "$JUMP"
+  "$ENI01" "$ENI02" "$MGMT01" "$MGMT02" "$VIP" "$VIPCIDR" "${RTBS[*]}" "$JUMP"
 ```
+
+> **A note on shells.** These blocks are written to work in both **bash** and **zsh**, which
+> matters because zsh is the default on macOS. The one place the two genuinely differ is
+> word-splitting: zsh does not split an unquoted variable into separate arguments, so the
+> route table IDs are kept in an array rather than a space-joined string. If you see
+> `InvalidRouteTableID.NotFound` naming all three IDs run together as one, that is this
+> difference, and it means `RTBS` was set as a string somewhere rather than as an array.
 
 Every line of that output must have a value after the `=`. **A blank means the lookup failed**,
 almost always because `REGION` or `STACK` is wrong, or because the stack has not reached
@@ -1366,10 +1376,9 @@ aws ec2 describe-network-interfaces --region "$REGION" \
 ### 6.3 Check 2 — every route table tagged, and carrying the alien prefix — 🖥️ WORKSTATION
 
 ```bash
-# $RTBS is deliberately UNQUOTED: it holds several IDs that must
-# arrive as separate arguments, not as one string
+# "${RTBS[@]}" expands to one argument per route table ID, in both bash and zsh
 aws ec2 describe-route-tables --region "$REGION" \
-  --route-table-ids $RTBS \
+  --route-table-ids "${RTBS[@]}" \
   --query "RouteTables[].[RouteTableId,Tags[?Key=='f5_cloud_failover_label'].Value|[0],Routes[?DestinationCidrBlock=='${VIPCIDR}'].NetworkInterfaceId|[0]]" \
   --output table
 ```
