@@ -1039,6 +1039,7 @@ stack would time out even though the cluster formed correctly.
 **Watching it.** From a jump host shell, SSH to a BIG-IP and:
 
 ```bash
+# ⚙️ BIG-IP
 tail -f /config/cluster-heal/log
 ```
 
@@ -1211,6 +1212,7 @@ If those exist, the deployment is fine and you are looking at a navigation probl
 listing is genuinely empty, check whether AS3 deployed at all:
 
 ```bash
+# ⚙️ BIG-IP
 curl -su 'admin:<password>' http://localhost:8100/mgmt/shared/appsvcs/declare | python3 -m json.tool | head -40
 ```
 
@@ -1647,6 +1649,7 @@ done
 **Window 2** — a second jump host shell; SSH to whichever device is **active** and trigger:
 
 ```bash
+# 🔒 JUMP HOST → ⚙️ BIG-IP (the tmsh lines run on the device once ssh connects)
 ssh admin@10.0.1.11
 tmsh show cm failover-status      # confirm this device is ACTIVE first
 tmsh run sys failover standby
@@ -1682,6 +1685,7 @@ All three should now show the *other* device's interface. And on the newly activ
 the log should show the work being done:
 
 ```bash
+# ⚙️ BIG-IP - the newly ACTIVE device
 grep -E 'Next hop address|Update required|Route\(s\) updated|No route operations' \
   /var/log/restnoded/restnoded.log | tail -12
 # want: "Next hop address: 10.0.x.11" and "Route(s) updated successfully"
@@ -2323,6 +2327,7 @@ end — the box never got as far as reading the secret.
 **Confirm it, then read the real error:**
 
 ```bash
+# ⚙️ BIG-IP
 # Did the installer ever land?
 which f5-bigip-runtime-init          # "no f5-bigip-runtime-init in ..." = never installed
 ls -l /var/log/f5-bigip-runtime-init.log   # missing = it never ran
@@ -2916,6 +2921,7 @@ sync device group, it syncs anyway and the peer rejects it.
 Check the folder, not the route:
 
 ```bash
+# ⚙️ BIG-IP
 tmsh list sys folder /LOCAL_ONLY
 ```
 
@@ -2934,6 +2940,7 @@ normal:
 Fix it on the affected device:
 
 ```bash
+# ⚙️ BIG-IP
 tmsh modify sys folder /LOCAL_ONLY device-group none traffic-group traffic-group-local-only
 tmsh save sys config
 tmsh run cm config-sync to-group failoverGroup
@@ -2954,6 +2961,7 @@ self-heal now detects and corrects this on both devices.
 > of the failed sync** — pushing from the peer does not clear it:
 >
 > ```bash
+> # ⚙️ BIG-IP - the device that was the SOURCE of the failed sync
 > tmsh run cm config-sync force-full-load-push to-group failoverGroup
 > sleep 30
 > tmsh show cm sync-status
@@ -2967,6 +2975,7 @@ self-heal now detects and corrects this on both devices.
 an ongoing failure or a cached one, two checks settle it:
 
 ```bash
+# ⚙️ BIG-IP
 grep -rnE '10\.0\.0\.1([^0-9]|$)' /config/bigip.conf /config/bigip_base.conf /config/partitions/*/bigip.conf
 grep -i '01070330' /var/log/ltm
 ```
@@ -3016,6 +3025,7 @@ names the phase it is in. Common outcomes:
 **Re-arm the self-heal** after manual changes:
 
 ```bash
+# ⚙️ BIG-IP
 rm -f /config/cluster-heal/done /config/cluster-heal/signalled
 echo '*/3 * * * * root /config/cluster-heal.sh >/dev/null 2>&1' > /etc/cron.d/cluster-heal
 ```
@@ -3035,18 +3045,21 @@ interface is not used for clustering. Substitute your own admin password and Sel
 Runtime-init is one-shot and will not re-run its failed clustering:
 
 ```bash
+# ⚙️ BIG-IP
 tmsh reboot
 ```
 
 **2. Once both are back, confirm `Root` exists on each:**
 
 ```bash
+# ⚙️ BIG-IP - both devices
 tmsh list cm trust-domain one-line
 ```
 
 **3. On failover02**, add failover01 over its **external** Self IP (not management):
 
 ```bash
+# ⚙️ BIG-IP - failover02
 tmsh modify cm trust-domain Root ca-devices add { 10.0.0.11 } \
   name failover01.local username admin password '<admin-password>'
 ```
@@ -3056,6 +3069,7 @@ tmsh modify cm trust-domain Root ca-devices add { 10.0.0.11 } \
 **4. On failover01**, create the device group and sync:
 
 ```bash
+# ⚙️ BIG-IP - failover01 ONLY
 tmsh create cm device-group failoverGroup type sync-failover
 tmsh modify cm device-group failoverGroup devices add { failover01.local failover02.local }
 tmsh modify cm device-group failoverGroup auto-sync enabled network-failover enabled
@@ -3072,12 +3086,14 @@ If it stays `Changes Pending` or `Awaiting Initial Sync`, force the initial push
 device holding the authoritative config:
 
 ```bash
+# ⚙️ BIG-IP
 tmsh run cm config-sync force-full-load-push to-group failoverGroup
 ```
 
 **5. Verify on both devices** — expect `Status: In Sync` (green), `Mode: high-availability`:
 
 ```bash
+# ⚙️ BIG-IP - both devices
 tmsh show cm sync-status
 ```
 
