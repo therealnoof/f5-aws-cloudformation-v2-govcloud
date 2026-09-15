@@ -458,6 +458,7 @@ ls /config/cluster-heal/     # markers: rebooted, trust_tries, tmm_restarted, di
 | Cluster never forms, both devices Active | Neither — HA channel | [7](#7-trace-how-clustering-bootstraps), guide §11 |
 | Permanent `Sync Failed` on a static route gateway | `/LOCAL_ONLY` in the sync group | [7](#7-trace-how-clustering-bootstraps) |
 | A new VIP does not fail over | Address outside `externalVipCidr` | [2](#2-trace-how-the-vip-got-built) |
+| `The specified address is already in use` on `BigipStaticExternalInterface` | Neither — a VPC endpoint ENI took the pinned external self IP | guide §11 |
 
 ---
 

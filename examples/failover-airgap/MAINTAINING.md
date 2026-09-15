@@ -353,6 +353,43 @@ Two things to keep in mind if you change this:
   That is the granularity a prefix list offers; there is no narrower form. Blank remains the
   right default for a build that does not need the check.
 
+### Interface VPC endpoints share the BIG-IP external subnet
+
+`modules/network` places all six interface endpoints (EC2, Secrets Manager, CloudFormation,
+SSM, ssmmessages, ec2messages) in **subnet index 0** of each AZ — the same subnet as the
+BIG-IP external Self IP. The S3 endpoint is a gateway endpoint and takes no address.
+
+AWS assigns each endpoint ENI an address of its own choosing; `AWS::EC2::VPCEndpoint` has no
+property to pin one. `bigIpExternalSelfIp01` / `02` are pinned at `.11`. Because the BIG-IP
+stacks consume `Network` outputs, the Network stack always completes first, so the endpoints
+always draw first and the BIG-IP takes what is left.
+
+**Result: roughly a 1-in-21 chance per deploy that a build fails** at
+`BigipStaticExternalInterface` with "The specified address is already in use" — about 2.4%
+per external subnet (6 endpoints over 251 usable addresses), across two AZs. Observed in
+`us-gov-east-1` on 2026-09-15.
+
+Two things not to do about it:
+
+- **Do not move the Self IP to a "safer" address.** AWS scatters endpoint addresses across the
+  whole subnet rather than filling from the bottom. One real deployment produced
+  `.11 .92 .122 .130 .142 .202` in a single `/24`. Every address carries the same risk, so
+  re-addressing changes nothing except invalidating the addressing documented in the guide.
+- **Do not treat a single failure as a real defect.** Relaunching is the correct response.
+  Two failures in a row at the same resource is a 1-in-400 coincidence and means something
+  else is wrong.
+
+The actual fix is to move the interface endpoints into a subnet where nothing is pinned.
+Subnet index 3 is the obvious candidate: with `numSubnets=4` it is created, and the only
+consumer is the `Application` nested stack, which is conditional on `provisionExampleApp`
+(`false` by default). Note that it is *not* unconditionally free — with the example app
+enabled, that module can pin an address through its `staticIp` parameter, so a fix has to
+account for that.
+
+This has not been done because `modules/network` is shared with `examples/failover` and
+`quickstart`; moving their endpoints is an upstream decision, not a local edit. Section 11 of
+the guide documents the symptom and tells operators to relaunch rather than re-address.
+
 ## Converging later
 
 The air-gap path has now proved out (see the validation record above), so the right

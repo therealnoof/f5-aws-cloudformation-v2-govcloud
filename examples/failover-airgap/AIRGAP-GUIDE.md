@@ -2738,6 +2738,88 @@ Your bucket has an older copy of a shared module. The air-gap solution needs the
 just the `failover-airgap/` directory. Re-run the `s3 sync` from
 [step 4.4](#44-stage-the-s3-bucket).
 
+### `The specified address is already in use` on `BigipStaticExternalInterface`
+
+**Relaunch the stack. Do not change any IP address.** That is the whole fix, and the
+instinct to start re-addressing subnets is the wrong one — it costs an afternoon and does not
+help. The rest of this entry is why.
+
+**Symptom.** The build fails within the first few minutes. The parent stack reports only:
+
+```
+Embedded stack ...-BigIpInstance02-... was not successfully created:
+The following resource(s) failed to create: [BigipStaticExternalInterface]
+```
+
+and the nested stack's own events give the real reason:
+
+```
+Resource handler returned message: "The specified address is already in use.
+(Service: Ec2, Status Code: 400 ...)" (HandlerErrorCode: GeneralServiceException)
+```
+
+It can hit either BIG-IP — `BigIpInstance01` or `BigIpInstance02`.
+
+**Cause: your VPC endpoints and your BIG-IP share a subnet.** `modules/network` places all
+six **interface** VPC endpoints — EC2, Secrets Manager, CloudFormation, SSM, ssmmessages,
+ec2messages — in subnet index 0 of each AZ. That is the **BIG-IP external subnet**
+(`10.0.0.0/24` in AZ A, `10.0.4.0/24` in AZ B with the default addressing). The S3 endpoint is
+a *gateway* endpoint, has no interface, and takes no address — it is not involved.
+
+Each interface endpoint gets one ENI per subnet, and **AWS chooses its address**. There is no
+property on `AWS::EC2::VPCEndpoint` to pin it. Meanwhile `bigIpExternalSelfIp01` / `02` are
+pinned by parameter at `.11`. And because the BIG-IP stacks consume `Network` outputs, the
+Network stack always finishes first — **the endpoints always draw before the BIG-IP does.**
+
+If one of those six draws `.11`, the BIG-IP's external interface has nowhere to go and the
+stack fails.
+
+**How likely.** Six draws from the 251 usable addresses in a `/24`:
+
+| | |
+|---|---|
+| One external subnet | ~2.4% (6 / 251) |
+| Per deploy, across both AZs | ~4.7% — roughly **1 deploy in 21** |
+
+So most builds are fine and an occasional one is not. Nothing about your parameters or your
+bucket is wrong when this happens.
+
+> **Why moving the address does not help.** The tempting fix is to change `.11` to something
+> "out of the way" like `.100`. It does not work: AWS scatters endpoint addresses across the
+> whole subnet rather than filling from the bottom. A real deployment produced these six, in
+> the same `/24` that wanted `.11`:
+>
+> ```
+> .11   .92   .122   .130   .142   .202
+> ```
+>
+> Every address in that subnet carries the same ~2.4% risk. Re-addressing swaps one lottery
+> ticket for another while invalidating the addressing in this guide.
+
+**Confirm it if you want to see it.** With the failed VPC still up (launch with
+`--on-failure DO_NOTHING`), list what is in the external subnet — the culprits are described
+as `VPC Endpoint Interface`:
+
+```bash
+aws ec2 describe-network-interfaces --region "$REGION" \
+  --filters "Name=private-ip-address,Values=10.0.4.11" \
+  --query 'NetworkInterfaces[].[NetworkInterfaceId,Status,VpcId,SubnetId,Description]' --output table
+```
+
+**Only the external subnet is exposed.** The management subnet (index 1) and internal subnet
+(index 2) carry no endpoints, so `bigIpMgmtAddress01` / `02` and `bigIpInternalSelfIp01` / `02`
+are never at risk. Only the two external self IPs are.
+
+**If it fails twice in a row at the same resource**, that is a 1-in-400 coincidence and
+something else is going on — stop relaunching and investigate. Account-level ENI throttling in
+the Region is the first thing to check.
+
+> **The real fix, for anyone maintaining this.** Move the six interface endpoints out of the
+> BIG-IP external subnet, into a subnet where nothing is pinned. That eliminates the collision
+> rather than improving the odds. It is a change to `modules/network`, which
+> `examples/failover` and `quickstart` also use, so it is an upstream decision rather than a
+> local edit — see MAINTAINING.md.
+
 ### The BIG-IPs never fetched their artifacts
 
 **Symptom.** The stack times out or rolls back, and on a BIG-IP that you kept alive with
