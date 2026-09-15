@@ -1399,41 +1399,72 @@ CLI prints `None`, not an empty cell, for a value it did not find. If the tag co
 instead, the table exists but was never tagged. Either way, see
 [troubleshooting](#the-vip-does-not-answer-at-all).
 
-### 6.4 Get onto the jump host — 🔒 JUMP HOST
+### 6.4 Get onto the jump host — 🖥️ WORKSTATION, then 🔒 JUMP HOST
 
 Checks 3, 4 and 6 talk to the BIG-IPs and to the VIP, which are only reachable from inside the
-VPC. Open a shell on the jump host 🖥️ WORKSTATION:
-
-```bash
-aws ssm start-session --region "$REGION" --target "$JUMP"
-```
+VPC. **Collect what you need first, then open the session** — once you are in the jump host
+shell there is no going back for a value without dropping the session.
 
 > **The jump host cannot look these values up for itself.** Its instance profile carries only
 > `AmazonSSMManagedInstanceCore` — deliberately, so that a shell on the jump host is not a
-> route to your account. That means no `cloudformation:DescribeStacks` and no
+> route into your account. That means no `cloudformation:DescribeStacks` and no
 > `secretsmanager:GetSecretValue`: running the section 6.1 block there fails with an access
 > or endpoint error. That is least privilege working, not a broken jump host.
 
-So carry the values across. **Back on 🖥️ WORKSTATION**, print a ready-made block — this also
-fetches the admin password, which the checks need:
+**Step 1 — 🖥️ WORKSTATION.** This block is **self-contained**: paste it into a brand-new
+terminal and it works. It does not depend on anything section 6.1 set, so you never have to
+scroll back. Edit the two values on the first lines if yours differ:
 
 ```bash
-SECRET=$(o bigIpSecretArn)
-PW=$(aws secretsmanager get-secret-value --region "$REGION" \
-  --secret-id "$SECRET" --query SecretString --output text)
+# 🖥️ WORKSTATION - self-contained, safe to paste into a fresh shell
+REGION=us-gov-east-1                 # your Region
+STACK=failover-airgap                # your stack name
 
+OUT=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+  --query 'Stacks[0].Outputs' --output json)
+o() { printf '%s' "$OUT" | python3 -c \
+  "import sys,json; print(next((x['OutputValue'] for x in json.load(sys.stdin) if x['OutputKey']=='$1'), ''))"; }
+
+JUMP=$(o ssmJumpInstanceId)
+PW=$(aws secretsmanager get-secret-value --region "$REGION" \
+  --secret-id "$(o bigIpSecretArn)" --query SecretString --output text)
+
+echo '----- copy from here -----'
 # %q shell-quotes each value, so a password containing a space, $, quote or
 # backslash still pastes correctly on the other side
-printf 'MGMT01=%q\nMGMT02=%q\nVIP=%q\nPW=%q\n' "$MGMT01" "$MGMT02" "$VIP" "$PW"
+printf 'MGMT01=%q\nMGMT02=%q\nVIP=%q\nPW=%q\n' \
+  "$(o bigIpInstanceMgmtPrivateIp01)" "$(o bigIpInstanceMgmtPrivateIp02)" \
+  "$(o vipAddress)" "$PW"
+echo '----- to here -----'
 ```
 
-Copy those four lines and paste them into the **jump host** shell. Everything from here to the
-end of section 6 runs there.
+**Step 2 — copy the four lines** between the two markers. Do this *before* opening the
+session, while they are still on screen.
+
+**Step 3 — 🖥️ WORKSTATION, open the session.** `JUMP` was set by the block above:
+
+```bash
+# 🖥️ WORKSTATION
+aws ssm start-session --region "$REGION" --target "$JUMP"
+```
+
+**Step 4 — 🔒 JUMP HOST, paste the four lines** at the prompt. Everything from here to the end
+of section 6 runs in this shell.
+
+> **Typing them by hand is perfectly reasonable.** It is only four values — two management
+> IPs, the VIP and the password. If you already have them, or you are demonstrating and do not
+> want a block of shell on screen, just type them. The printed block exists to save you
+> looking them up, not because the values are special.
+
+> **If you have already dropped into the jump host** and find a variable unset, you do not
+> have to tear down the session. Open a **second terminal**, run the Step 1 block there — it
+> is self-contained, so a fresh shell is fine — and paste the result into your existing jump
+> host window.
 
 > **Why `%q` and not plain `%s`.** If you supplied your own secret in section 4.2 — which is
 > the recommended path — the password can contain a space, `$`, a quote or a backslash. Pasted
 > unquoted, `PW=two words` sets `PW=two` and then tries to run `words`. `%q` shell-quotes each
-> value so it survives the paste intact.
+> value so it survives the paste intact, in both bash and zsh.
 
 > **This puts the admin password into that shell's history and process list.** On a
 > single-operator lab jump host that is an acceptable trade for a readable procedure. It is
