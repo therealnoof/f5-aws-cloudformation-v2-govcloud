@@ -1629,7 +1629,7 @@ back" and "you did not set a variable" cannot look the same:
 | What you see | What it means |
 |---|---|
 | `HTTP 200` and a device name | Pass. |
-| `STOP: $VIP is not set` | Nothing is wrong with the deployment. You are on the jump host and `VIP` was never carried across — see [section 6.4](#64-get-onto-the-jump-host--️-workstation-then--jump-host). This is easy to hit when you type the values by hand. |
+| `STOP: $VIP is not set` | Nothing is wrong with the deployment. You are on the jump host and `VIP` was never carried across — see section 6.4. This is easy to hit when you type the values by hand. |
 | `HTTP 000` | Nothing answered within ten seconds. The usual cause is that the route points at the **standby** device — that is check 5, not a fault in the VIP. Work back through checks 1, 2 and 5 in that order. |
 | `HTTP 200` but no device name | Something answered, but not the demo iRule. You may have a real pool behind the VIP, or `provisionExampleApp=true`. |
 | Any other code | The BIG-IP is answering, so the network path is fine — the problem is the virtual server or its pool. |
