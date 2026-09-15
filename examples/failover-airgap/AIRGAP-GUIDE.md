@@ -1317,8 +1317,22 @@ OUT=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK
   --query 'Stacks[0].Outputs' --output json)
 
 # helper: pull one output value out of that JSON by its key
-o() { printf '%s' "$OUT" | python3 -c \
-  "import sys,json; print(next((x['OutputValue'] for x in json.load(sys.stdin) if x['OutputKey']=='$1'), ''))"; }
+o() { printf '%s' "$OUT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)          # no outputs to read - o() returns blank, see the check below
+print(next((x['OutputValue'] for x in d if x['OutputKey'] == '$1'), ''))
+"; }
+
+# Fail here with a useful message rather than once per lookup with a traceback.
+if [ -z "$OUT" ] || [ "$OUT" = "null" ]; then
+  echo "STOP: no outputs for stack '$STACK' in $REGION. Your stack names:"
+  aws cloudformation list-stacks --region "$REGION" \
+    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+    --query 'StackSummaries[].StackName' --output text
+fi
 
 ENI01=$(o bigIpExternalInterfaceId01)   # instance A external interface — initial route target
 ENI02=$(o bigIpExternalInterfaceId02)   # instance B external interface
@@ -1422,8 +1436,22 @@ STACK=failover-airgap                # your stack name
 
 OUT=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
   --query 'Stacks[0].Outputs' --output json)
-o() { printf '%s' "$OUT" | python3 -c \
-  "import sys,json; print(next((x['OutputValue'] for x in json.load(sys.stdin) if x['OutputKey']=='$1'), ''))"; }
+o() { printf '%s' "$OUT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)          # no outputs to read - o() returns blank, see the check below
+print(next((x['OutputValue'] for x in d if x['OutputKey'] == '$1'), ''))
+"; }
+
+# Fail here with a useful message rather than once per lookup with a traceback.
+if [ -z "$OUT" ] || [ "$OUT" = "null" ]; then
+  echo "STOP: no outputs for stack '$STACK' in $REGION. Your stack names:"
+  aws cloudformation list-stacks --region "$REGION" \
+    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+    --query 'StackSummaries[].StackName' --output text
+fi
 
 JUMP=$(o ssmJumpInstanceId)
 PW=$(aws secretsmanager get-secret-value --region "$REGION" \
